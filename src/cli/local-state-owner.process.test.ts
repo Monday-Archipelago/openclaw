@@ -877,7 +877,7 @@ module.exports = {
           NODE_DISABLE_COMPILE_CACHE: "1",
         };
         let childPid: number | undefined;
-        let result;
+        let result: Awaited<ReturnType<typeof runCliProcessChild>>;
         try {
           result = await runCliProcessChild({
             nodeArgs: [...entrypoint, "models", "auth", "activate", profileId],

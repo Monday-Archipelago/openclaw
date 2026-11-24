@@ -279,7 +279,32 @@ try {
               const { registerDatabaseCommand } = await import("./program/register.database.js");
               registerDatabaseCommand(program);
             }
-            await program.parseAsync(process.argv.slice(2), { from: "user" });
+            const parseProgram = () =>
+              program.parseAsync(process.argv.slice(2), { from: "user" });
+            if (process.argv[2] === "models") {
+              const [{ withCliProcessScope }, { withCliPluginInvocation }, { closeCliResources }] =
+                await Promise.all([
+                  import("./runtime-cleanup-scope.js"),
+                  import("./run-main-plugin-cache.js"),
+                  import("./runtime-cleanup.js"),
+                ]);
+              await withCliProcessScope(() =>
+                withCliPluginInvocation(false, async (cleanup) => {
+                  const resources = cleanup?.pluginResources;
+                  try {
+                    await parseProgram();
+                  } finally {
+                    try {
+                      await closeCliResources(cleanup);
+                    } finally {
+                      await resources?.release();
+                    }
+                  }
+                }),
+              );
+            } else {
+              await parseProgram();
+            }
           },
           { retainRoutingUntilProcessExit: true },
         ),

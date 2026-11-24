@@ -19,6 +19,7 @@ import {
   useManagedWorktreeTestRepository,
 } from "../agents/worktrees/service.test-support.js";
 import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildMinimalGatewayHelloOkPayload,
   closeMinimalGatewayServer,
@@ -39,6 +40,7 @@ import {
   type GatewayLockHandle,
 } from "../infra/gateway-lock.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import {
   createGatewaySchedulerClock,
@@ -49,7 +51,6 @@ import {
   reserveTestPortListener,
   type TestPortClaim,
 } from "../test-utils/port-claims.js";
-import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { localStateOwnerFixtureEntrypoint } from "./cli-entrypoint.test-support.js";
 import { captureCliProcessTree } from "./cli-process-tree.test-support.js";
@@ -765,7 +766,7 @@ module.exports = {
 };
 `,
         );
-        const savedConfig = {
+        const savedConfig: OpenClawConfig = {
           plugins: {
             allow: [pluginId],
             entries: { [pluginId]: { enabled: true } },

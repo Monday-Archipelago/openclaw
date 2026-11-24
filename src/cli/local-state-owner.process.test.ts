@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";
@@ -9,6 +9,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { WebSocketServer } from "ws";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { isProcessAlive } from "../../test/helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createManagedWorktreeOwnerPolicy } from "../agents/worktrees/owner-protection.js";
 import { updateRegistryWorktree } from "../agents/worktrees/registry.js";
@@ -18,6 +19,7 @@ import {
   useManagedWorktreeTestRepository,
 } from "../agents/worktrees/service.test-support.js";
 import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildMinimalGatewayHelloOkPayload,
   closeMinimalGatewayServer,
@@ -38,6 +40,7 @@ import {
   type GatewayLockHandle,
 } from "../infra/gateway-lock.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import {
   createGatewaySchedulerClock,
@@ -48,7 +51,9 @@ import {
   reserveTestPortListener,
   type TestPortClaim,
 } from "../test-utils/port-claims.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { localStateOwnerFixtureEntrypoint } from "./cli-entrypoint.test-support.js";
+import { captureCliProcessTree } from "./cli-process-tree.test-support.js";
 import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
 import { registerWorktreeListingOwnerTests } from "./local-state-owner-listing.test-support.js";
 
@@ -171,7 +176,7 @@ describe("same-root local mutation routing", () => {
             authenticated = frame.params?.auth?.token === token;
             expect(authenticated).toBe(true);
             const hello = buildMinimalGatewayHelloOkPayload({
-              methods: Object.keys(handlers),
+              methods: [...Object.keys(handlers), "status"],
               auth: { role: "operator", scopes: ["operator.admin"] },
               snapshot: { stateDir: env.OPENCLAW_STATE_DIR, configPath: env.OPENCLAW_CONFIG_PATH },
             });
@@ -186,6 +191,10 @@ describe("same-root local mutation routing", () => {
           }
           expect(authenticated).toBe(true);
           const method = frame.method!;
+          if (method === "status") {
+            sendMinimalGatewayResponse(ws, frame.id, {});
+            return;
+          }
           expect(handlers[method]).toBeTypeOf("function");
           methods.push(method);
           if (method === "worktrees.create") {
@@ -539,6 +548,7 @@ describe("same-root local mutation routing", () => {
   it.each([
     ["mcp logout", ["mcp", "logout", "synthetic-server"]],
     ["models auth logout", ["models", "auth", "logout", "synthetic:manual", "--yes"]],
+    ["models auth activate", ["models", "auth", "activate", "synthetic:setup"]],
     ["sandbox recreate", ["sandbox", "recreate", "--all", "--force"]],
     [
       "migration import",
@@ -572,6 +582,342 @@ describe("same-root local mutation routing", () => {
       ).toBe(0);
     },
   );
+});
+
+async function waitForChildStdoutMarker(
+  child: ChildProcessWithoutNullStreams,
+  marker: string,
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    let stdout = "";
+    let stderr = "";
+    const cleanup = () => {
+      child.stdout.off("data", onData);
+      child.stderr.off("data", onStderr);
+      child.stdout.off("end", onEnd);
+      child.stdout.off("error", onError);
+      child.stderr.off("error", onError);
+      child.off("exit", onExit);
+      child.off("error", onError);
+    };
+    const succeed = () => {
+      cleanup();
+      resolve();
+    };
+    const fail = (message: string, cause?: unknown) => {
+      cleanup();
+      const tail = (value: string) => value.slice(-8_000);
+      reject(
+        new Error(
+          `${message}\n--- child stderr (tail) ---\n${tail(stderr)}\n--- child stdout (tail) ---\n${tail(stdout)}`,
+          cause === undefined ? undefined : { cause },
+        ),
+      );
+    };
+    const onData = (chunk: string | Buffer) => {
+      stdout += chunk.toString();
+      if (stdout.includes(marker)) {
+        succeed();
+      }
+    };
+    const onStderr = (chunk: string | Buffer) => {
+      stderr += chunk.toString();
+    };
+    const onEnd = () => fail(`CLI stdout ended before marker ${JSON.stringify(marker)}`);
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) =>
+      fail(
+        `CLI exited before marker ${JSON.stringify(marker)} (code=${code} signal=${signal})`,
+      );
+    const onError = (error: Error) =>
+      fail(`CLI failed before marker ${JSON.stringify(marker)}: ${error.message}`, error);
+
+    child.stdout.on("data", onData);
+    child.stderr.on("data", onStderr);
+    child.stdout.once("end", onEnd);
+    child.once("exit", onExit);
+    child.stdout.once("error", onError);
+    child.stderr.once("error", onError);
+    child.once("error", onError);
+  });
+}
+
+function processRows(tree: string): Array<{ pid: number; ppid: number }> {
+  return tree
+    .split("\n")
+    .flatMap((line) => {
+      try {
+        const value = JSON.parse(line) as { pid?: unknown; ppid?: unknown };
+        return typeof value.pid === "number" && typeof value.ppid === "number"
+          ? [{ pid: value.pid, ppid: value.ppid }]
+          : [];
+      } catch {
+        return [];
+      }
+    });
+}
+
+async function assertNaturalExitAfterOutput(
+  child: ChildProcessWithoutNullStreams,
+  marker: string,
+  timeoutMs = 5_000,
+): Promise<void> {
+  await waitForChildStdoutMarker(child, marker);
+  const descendants =
+    process.platform === "win32"
+      ? []
+      : processRows(await captureCliProcessTree(child.pid))
+          .filter((row) => row.pid !== child.pid)
+          .map((row) => row.pid);
+  if (child.exitCode === null && child.signalCode === null) {
+    const exit = once(child, "exit");
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`CLI did not exit within ${timeoutMs}ms after final output`)),
+        timeoutMs,
+      );
+      timer.unref();
+    });
+    try {
+      await Promise.race([exit, deadline]);
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
+  }
+  expect(
+    descendants.filter(isProcessAlive),
+    `descendant processes remained after auth-activate completion: ${descendants.join(", ")}`,
+  ).toEqual([]);
+}
+
+describe("models auth activate process lifecycle", () => {
+  it("activates a plugin-owned saved sign-in offline and exits naturally", async () => {
+    await withOpenClawTestState(
+      { label: "models-auth-activate-process", applyEnv: false },
+      async (state) => {
+        const pluginId = "auth-activate-runtime";
+        const providerId = "fixture-provider";
+        const modelId = "proof-model";
+        const modelRef = `${providerId}/${modelId}`;
+        const profileId = `${providerId}:setup-process`;
+        const pluginDir = state.statePath("pending-auth-runtime");
+        const lifecyclePath = state.statePath("auth-activate-lifecycle.jsonl");
+        await fs.mkdir(pluginDir, { recursive: true });
+        await fs.writeFile(
+          path.join(pluginDir, "package.json"),
+          JSON.stringify({
+            name: "@fixture/auth-activate-runtime",
+            version: "1.0.0",
+            type: "commonjs",
+            openclaw: { extensions: ["./index.cjs"] },
+          }),
+        );
+        await fs.writeFile(
+          path.join(pluginDir, "openclaw.plugin.json"),
+          JSON.stringify({
+            id: pluginId,
+            activation: { onAgentHarnesses: [pluginId] },
+            configSchema: { type: "object", properties: {}, additionalProperties: false },
+          }),
+        );
+        await fs.writeFile(
+          path.join(pluginDir, "index.cjs"),
+          `
+const fs = require("node:fs");
+const record = phase =>
+  fs.appendFileSync(process.env.AUTH_ACTIVATE_LIFECYCLE_PATH, JSON.stringify({ phase, pid: process.pid }) + "\\n");
+const assistant = {
+  role: "assistant",
+  content: [{ type: "text", text: "OK" }],
+  api: "openai-responses",
+  provider: ${JSON.stringify(providerId)},
+  model: ${JSON.stringify(modelId)},
+  usage: {
+    input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  },
+  stopReason: "stop",
+  timestamp: Date.now(),
+};
+module.exports = {
+  id: ${JSON.stringify(pluginId)},
+  register(api) {
+    record("register");
+    api.lifecycle.onDispose(() => record("dispose"));
+    api.registerAgentHarness({
+      id: ${JSON.stringify(pluginId)},
+      label: "Auth activate lifecycle fixture",
+      supports: ({ provider }) =>
+        provider === ${JSON.stringify(providerId)}
+          ? { supported: true, priority: 100 }
+          : { supported: false },
+      conversationToolPolicySupport: "exact",
+      supportsTurnScopedToolRestrictions: true,
+      async runAttempt() {
+        record("attempt");
+        return {
+          terminal: { kind: "ok" },
+          sessionIdUsed: "auth-activate-proof-session",
+          messagesSnapshot: [assistant],
+          assistantTexts: ["OK"],
+          toolMetas: [],
+          lastAssistant: assistant,
+          didSendViaMessagingTool: false,
+          messagingToolSentTexts: [],
+          messagingToolSentMediaUrls: [],
+          messagingToolSentTargets: [],
+          cloudCodeAssistFormatError: false,
+          replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+          itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+          runtimeArtifact: { id: "fixture-runtime", fingerprint: "fixture-runtime-v1" },
+        };
+      },
+      runtimeArtifact: {
+        async validate(artifact) {
+          return artifact.id === "fixture-runtime" && artifact.fingerprint === "fixture-runtime-v1";
+        },
+      },
+    });
+  },
+};
+`,
+        );
+        const savedConfig: OpenClawConfig = {
+          plugins: {
+            allow: [pluginId],
+            entries: { [pluginId]: { enabled: true } },
+            slots: { memory: "none" },
+          },
+          agents: {
+            defaults: {
+              workspace: state.workspaceDir,
+              skipBootstrap: true,
+              skills: [],
+              models: { [modelRef]: { agentRuntime: { id: pluginId } } },
+            },
+          },
+          models: {
+            mode: "replace",
+            providers: {
+              [providerId]: {
+                api: "openai-responses",
+                baseUrl: "https://example.invalid/v1",
+                models: [
+                  {
+                    id: modelId,
+                    name: "Lifecycle fixture",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 32_000,
+                    maxTokens: 1_000,
+                  },
+                ],
+              },
+            },
+          },
+        };
+        await seedInstalledPluginIndex(
+          {
+            [pluginId]: {
+              source: "path",
+              sourcePath: pluginDir,
+              installPath: pluginDir,
+            },
+          },
+          {
+            stateDir: state.stateDir,
+            env: state.env,
+            config: savedConfig,
+            candidates: [
+              {
+                idHint: pluginId,
+                source: path.join(pluginDir, "index.cjs"),
+                rootDir: pluginDir,
+                origin: "global",
+              },
+            ],
+          },
+        );
+        await state.writeConfig({
+          plugins: { slots: { memory: "none" } },
+          agents: {
+            defaults: {
+              workspace: state.workspaceDir,
+              skipBootstrap: true,
+              skills: [],
+            },
+          },
+        });
+        await state.writeAuthProfiles({
+          version: 1,
+          profiles: {
+            [profileId]: {
+              type: "api_key",
+              provider: providerId,
+              key: "synthetic-auth-activate-key",
+              setup: {
+                replacement: false,
+                modelRef,
+                configJson: JSON.stringify(savedConfig),
+                pluginId,
+                agentRuntimeId: pluginId,
+              },
+            },
+          },
+        });
+        const env: NodeJS.ProcessEnv = {
+          ...state.env,
+          OPENCLAW_PROFILE: "auth-activate-process-test",
+          // Vitest children inherit VITEST=true, which suppresses defaultRuntime.log.
+          OPENCLAW_TEST_RUNTIME_LOG: "1",
+          AUTH_ACTIVATE_LIFECYCLE_PATH: lifecyclePath,
+          OPENCLAW_NO_RESPAWN: "1",
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          NODE_DISABLE_COMPILE_CACHE: "1",
+        };
+        let childPid: number | undefined;
+        let result: Awaited<ReturnType<typeof runCliProcessChild>>;
+        try {
+          result = await runCliProcessChild({
+            nodeArgs: [...entrypoint, "models", "auth", "activate", profileId],
+            env,
+            timeoutMs: 60_000,
+            interact: async (child) => {
+              childPid = child.pid;
+              child.stdin.end();
+              await assertNaturalExitAfterOutput(
+                child,
+                "Sign-in verified and saved. The running connection could not be confirmed.",
+              );
+            },
+          });
+        } catch (error) {
+          const lifecycle = await fs.readFile(lifecyclePath, "utf8").catch(() => "");
+          throw new Error(
+            `auth-activate process fixture failed\n--- lifecycle ---\n${lifecycle || "(empty)"}`,
+            { cause: error },
+          );
+        }
+        expect(result.code, result.stderr).toBe(0);
+        expect(result.signal).toBeNull();
+        expect(result.stdout).toContain(`Inference verified: ${modelRef}`);
+        const lifecycle = (await fs.readFile(lifecyclePath, "utf8"))
+          .trim()
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => JSON.parse(line) as { phase: string; pid: number });
+        const phases = lifecycle.map(({ phase }) => phase);
+        expect(phases).toContain("attempt");
+        expect(phases).toContain("dispose");
+        expect(phases.filter((phase) => phase === "register").length).toBeGreaterThanOrEqual(2);
+        expect(childPid).toBeDefined();
+        expect(new Set(lifecycle.map(({ pid }) => pid))).toEqual(new Set([childPid!]));
+      },
+    );
+  });
 });
 
 describe("offline local mutation custody", () => {

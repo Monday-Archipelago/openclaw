@@ -269,6 +269,8 @@ try {
               registerMcpCli(program);
             } else if (process.argv[2] === "models") {
               const { registerModelsCli } = await import("./models-cli.js");
+              const { registerPreActionHooks } = await import("./program/preaction.js");
+              registerPreActionHooks(program, "test");
               registerModelsCli(program);
             } else if (process.argv[2] === "exec-policy") {
               const { registerExecPolicyCli } = await import("./exec-policy-cli.js");

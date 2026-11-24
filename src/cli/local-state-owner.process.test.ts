@@ -582,7 +582,6 @@ describe("same-root local mutation routing", () => {
   );
 });
 
-
 async function waitForChildStdoutMarker(
   child: ChildProcessWithoutNullStreams,
   marker: string,

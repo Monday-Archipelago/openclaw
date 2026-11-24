@@ -49,6 +49,7 @@ import {
   reserveTestPortListener,
   type TestPortClaim,
 } from "../test-utils/port-claims.js";
+import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { localStateOwnerFixtureEntrypoint } from "./cli-entrypoint.test-support.js";
 import { captureCliProcessTree } from "./cli-process-tree.test-support.js";
@@ -733,6 +734,8 @@ module.exports = {
         provider === ${JSON.stringify(providerId)}
           ? { supported: true, priority: 100 }
           : { supported: false },
+      conversationToolPolicySupport: "exact",
+      supportsTurnScopedToolRestrictions: true,
       async runAttempt() {
         record("attempt");
         return {
@@ -767,13 +770,6 @@ module.exports = {
             allow: [pluginId],
             entries: { [pluginId]: { enabled: true } },
             slots: { memory: "none" },
-            installs: {
-              [pluginId]: {
-                source: "path",
-                sourcePath: pluginDir,
-                installPath: pluginDir,
-              },
-            },
           },
           agents: {
             defaults: {
@@ -804,6 +800,28 @@ module.exports = {
             },
           },
         };
+        await seedInstalledPluginIndex(
+          {
+            [pluginId]: {
+              source: "path",
+              sourcePath: pluginDir,
+              installPath: pluginDir,
+            },
+          },
+          {
+            stateDir: state.stateDir,
+            env: state.env,
+            config: savedConfig,
+            candidates: [
+              {
+                idHint: pluginId,
+                source: path.join(pluginDir, "index.cjs"),
+                rootDir: pluginDir,
+                origin: "global",
+              },
+            ],
+          },
+        );
         await state.writeConfig({
           plugins: { slots: { memory: "none" } },
           agents: {
@@ -838,10 +856,12 @@ module.exports = {
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
           NODE_DISABLE_COMPILE_CACHE: "1",
         };
+        let childPid: number | undefined;
         const result = await runCliProcessChild({
           nodeArgs: [...entrypoint, "models", "auth", "activate", profileId],
           env,
           interact: async (child) => {
+            childPid = child.pid;
             child.stdin.end();
             await assertNaturalExitAfterOutput(
               child,
@@ -857,9 +877,12 @@ module.exports = {
           .split("\n")
           .filter(Boolean)
           .map((line) => JSON.parse(line) as { phase: string; pid: number });
-        expect(lifecycle.map(({ phase }) => phase)).toContain("attempt");
-        expect(lifecycle.map(({ phase }) => phase)).toContain("dispose");
-        expect(new Set(lifecycle.map(({ pid }) => pid))).toEqual(new Set([result.pid]));
+        const phases = lifecycle.map(({ phase }) => phase);
+        expect(phases).toContain("attempt");
+        expect(phases).toContain("dispose");
+        expect(phases.filter((phase) => phase === "register").length).toBeGreaterThanOrEqual(2);
+        expect(childPid).toBeDefined();
+        expect(new Set(lifecycle.map(({ pid }) => pid))).toEqual(new Set([childPid!]));
       },
     );
   });

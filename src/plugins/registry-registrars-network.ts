@@ -126,12 +126,22 @@ function adaptPluginGatewayMethodHandler(
     };
     const scope = getPluginRuntimeGatewayRequestScope();
     const invoke = () => handler({ ...opts, respond, assertHandlerCurrent });
+    const sessionResource = opts.sessionAccessAuthority;
     // A declared authenticated-request contract composes RPCs with the exact
     // admitted client, never a synthetic identity or inherited unrelated grant.
     try {
       const result = scope
         ? await withPluginRuntimeGatewayRequestScope(
-            { ...scope, gatewayMethodDispatchAllowed: mayDispatch && scope.client != null },
+            {
+              ...scope,
+              gatewayMethodDispatchAllowed: mayDispatch && scope.client != null,
+              sessionResourceForFork: sessionResource
+                ? () => {
+                    sessionResource.assertCurrent();
+                    return sessionResource.target;
+                  }
+                : undefined,
+            },
             invoke,
           )
         : await invoke();

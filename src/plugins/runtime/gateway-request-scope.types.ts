@@ -11,6 +11,8 @@ import type { OpenClawPluginNodeWorkspace } from "../types.node-host.js";
 export type PluginRuntimeGatewayRequestScope = {
   /** Request-owned reader headroom expires when the interactive handler settles. */
   canUseInteractiveStateReadCapacity?: () => boolean;
+  /** Capture the existing session while its invocation-bound resource grant is open. */
+  sessionResourceForFork?: () => import("../../gateway/session-access-authority.js").GatewaySessionAccessAuthority["target"];
   /** Exact registration and Gateway owner retained across awaited system operations. */
   assertSystemOwnerCurrent?: () => void;
   /** Recheck the admitted HTTP device or cookie grant before effects/disclosure; rejection sends HTTP 401 and throws. */

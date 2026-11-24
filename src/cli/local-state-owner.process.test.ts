@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";
@@ -9,6 +9,11 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { WebSocketServer } from "ws";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import {
+  createOpenAiResponsesModelConfig,
+  startOpenAiResponsesModelServer,
+} from "../../test/helpers/openai-responses-model-fixture.js";
+import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createManagedWorktreeOwnerPolicy } from "../agents/worktrees/owner-protection.js";
 import { updateRegistryWorktree } from "../agents/worktrees/registry.js";
@@ -48,7 +53,9 @@ import {
   reserveTestPortListener,
   type TestPortClaim,
 } from "../test-utils/port-claims.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { localStateOwnerFixtureEntrypoint } from "./cli-entrypoint.test-support.js";
+import { captureCliProcessTree } from "./cli-process-tree.test-support.js";
 import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
 import { registerWorktreeListingOwnerTests } from "./local-state-owner-listing.test-support.js";
 
@@ -539,6 +546,7 @@ describe("same-root local mutation routing", () => {
   it.each([
     ["mcp logout", ["mcp", "logout", "synthetic-server"]],
     ["models auth logout", ["models", "auth", "logout", "synthetic:manual", "--yes"]],
+    ["models auth activate", ["models", "auth", "activate", "synthetic:setup"]],
     ["sandbox recreate", ["sandbox", "recreate", "--all", "--force"]],
     [
       "migration import",
@@ -572,6 +580,188 @@ describe("same-root local mutation routing", () => {
       ).toBe(0);
     },
   );
+});
+
+
+async function waitForChildStdoutMarker(
+  child: ChildProcessWithoutNullStreams,
+  marker: string,
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    let stdout = "";
+    const cleanup = () => {
+      child.stdout.off("data", onData);
+      child.stdout.off("end", onEnd);
+      child.stdout.off("error", onError);
+      child.off("exit", onExit);
+      child.off("error", onError);
+    };
+    const succeed = () => {
+      cleanup();
+      resolve();
+    };
+    const fail = (message: string, cause?: unknown) => {
+      cleanup();
+      reject(new Error(message, cause === undefined ? undefined : { cause }));
+    };
+    const onData = (chunk: string | Buffer) => {
+      stdout += chunk.toString();
+      if (stdout.includes(marker)) {
+        succeed();
+      }
+    };
+    const onEnd = () => fail(`CLI stdout ended before marker ${JSON.stringify(marker)}`);
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) =>
+      fail(
+        `CLI exited before marker ${JSON.stringify(marker)} (code=${code} signal=${signal})`,
+      );
+    const onError = (error: Error) =>
+      fail(`CLI failed before marker ${JSON.stringify(marker)}: ${error.message}`, error);
+
+    child.stdout.on("data", onData);
+    child.stdout.once("end", onEnd);
+    child.once("exit", onExit);
+    child.stdout.once("error", onError);
+    child.once("error", onError);
+  });
+}
+
+function processRows(tree: string): Array<{ pid: number; ppid: number }> {
+  return tree
+    .split("\n")
+    .flatMap((line) => {
+      try {
+        const value = JSON.parse(line) as { pid?: unknown; ppid?: unknown };
+        return typeof value.pid === "number" && typeof value.ppid === "number"
+          ? [{ pid: value.pid, ppid: value.ppid }]
+          : [];
+      } catch {
+        return [];
+      }
+    });
+}
+
+async function assertNaturalExitAfterOutput(
+  child: ChildProcessWithoutNullStreams,
+  marker: string,
+  timeoutMs = 5_000,
+): Promise<void> {
+  await waitForChildStdoutMarker(child, marker);
+  if (process.platform !== "win32") {
+    const tree = await captureCliProcessTree(child.pid);
+    const rows = processRows(tree);
+    expect(
+      rows.filter((row) => row.pid !== child.pid),
+      `descendant processes remained after final auth-activate output:\n${tree}`,
+    ).toEqual([]);
+  }
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return;
+  }
+  const exit = once(child, "exit");
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`CLI did not exit within ${timeoutMs}ms after final output`)),
+      timeoutMs,
+    );
+    timer.unref();
+  });
+  try {
+    await Promise.race([exit, deadline]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+describe("models auth activate process lifecycle", () => {
+  it("activates a saved sign-in offline and exits naturally without descendants", async () => {
+    await withOpenClawTestState(
+      { label: "models-auth-activate-process", applyEnv: false },
+      async (state) => {
+        const providerId = "fixture";
+        const modelId = "test-model";
+        const modelRef = `${providerId}/${modelId}`;
+        const profileId = `${providerId}:setup-process`;
+        const key = "synthetic-auth-activate-key";
+        let requests = 0;
+        const provider = await startOpenAiResponsesModelServer({
+          modelId,
+          bindError: "Could not bind auth-activate fixture provider",
+          onRequest: async (request, response) => {
+            requests += 1;
+            expect(request.headers.authorization).toBe(`Bearer ${key}`);
+            request.resume();
+            await once(request, "end");
+            writeOpenAiResponsesText(response, {
+              text: "OK",
+              messageId: `msg_auth_activate_${requests}`,
+              responseId: `resp_auth_activate_${requests}`,
+            });
+          },
+        });
+        try {
+          const savedConfig = createOpenAiResponsesModelConfig({
+            baseUrl: provider.baseUrl,
+            providerId,
+            modelId,
+            reasoning: false,
+            toolProfile: "minimal",
+          });
+          await state.writeConfig({
+            plugins: { slots: { memory: "none" } },
+            agents: {
+              defaults: {
+                workspace: state.workspaceDir,
+                skipBootstrap: true,
+                skills: [],
+              },
+            },
+          });
+          await state.writeAuthProfiles({
+            version: 1,
+            profiles: {
+              [profileId]: {
+                type: "api_key",
+                provider: providerId,
+                key,
+                setup: {
+                  replacement: false,
+                  modelRef,
+                  configJson: JSON.stringify(savedConfig),
+                },
+              },
+            },
+          });
+          const env: NodeJS.ProcessEnv = {
+            ...state.env,
+            OPENCLAW_NO_RESPAWN: "1",
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+            NODE_DISABLE_COMPILE_CACHE: "1",
+          };
+          const result = await runCliProcessChild({
+            nodeArgs: [...entrypoint, "models", "auth", "activate", profileId],
+            env,
+            interact: async (child) => {
+              child.stdin.end();
+              await assertNaturalExitAfterOutput(
+                child,
+                "Sign-in verified and saved. The running connection could not be confirmed.",
+              );
+            },
+          });
+          expect(result.code, result.stderr).toBe(0);
+          expect(result.signal).toBeNull();
+          expect(result.stdout).toContain(`Inference verified: ${modelRef}`);
+          expect(requests).toBeGreaterThan(0);
+        } finally {
+          await provider.close();
+        }
+      },
+    );
+  });
 });
 
 describe("offline local mutation custody", () => {

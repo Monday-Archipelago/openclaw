@@ -871,6 +871,8 @@ module.exports = {
         const env: NodeJS.ProcessEnv = {
           ...state.env,
           OPENCLAW_PROFILE: "auth-activate-process-test",
+          // Vitest children inherit VITEST=true, which suppresses defaultRuntime.log.
+          OPENCLAW_TEST_RUNTIME_LOG: "1",
           AUTH_ACTIVATE_LIFECYCLE_PATH: lifecyclePath,
           OPENCLAW_NO_RESPAWN: "1",
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",

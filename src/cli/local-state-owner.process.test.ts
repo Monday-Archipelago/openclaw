@@ -176,7 +176,7 @@ describe("same-root local mutation routing", () => {
             authenticated = frame.params?.auth?.token === token;
             expect(authenticated).toBe(true);
             const hello = buildMinimalGatewayHelloOkPayload({
-              methods: Object.keys(handlers),
+              methods: [...Object.keys(handlers), "status"],
               auth: { role: "operator", scopes: ["operator.admin"] },
               snapshot: { stateDir: env.OPENCLAW_STATE_DIR, configPath: env.OPENCLAW_CONFIG_PATH },
             });
@@ -191,6 +191,10 @@ describe("same-root local mutation routing", () => {
           }
           expect(authenticated).toBe(true);
           const method = frame.method!;
+          if (method === "status") {
+            sendMinimalGatewayResponse(ws, frame.id, {});
+            return;
+          }
           expect(handlers[method]).toBeTypeOf("function");
           methods.push(method);
           if (method === "worktrees.create") {
@@ -586,10 +590,13 @@ async function waitForChildStdoutMarker(
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     let stdout = "";
+    let stderr = "";
     const cleanup = () => {
       child.stdout.off("data", onData);
+      child.stderr.off("data", onStderr);
       child.stdout.off("end", onEnd);
       child.stdout.off("error", onError);
+      child.stderr.off("error", onError);
       child.off("exit", onExit);
       child.off("error", onError);
     };
@@ -599,13 +606,22 @@ async function waitForChildStdoutMarker(
     };
     const fail = (message: string, cause?: unknown) => {
       cleanup();
-      reject(new Error(message, cause === undefined ? undefined : { cause }));
+      const tail = (value: string) => value.slice(-8_000);
+      reject(
+        new Error(
+          `${message}\n--- child stderr (tail) ---\n${tail(stderr)}\n--- child stdout (tail) ---\n${tail(stdout)}`,
+          cause === undefined ? undefined : { cause },
+        ),
+      );
     };
     const onData = (chunk: string | Buffer) => {
       stdout += chunk.toString();
       if (stdout.includes(marker)) {
         succeed();
       }
+    };
+    const onStderr = (chunk: string | Buffer) => {
+      stderr += chunk.toString();
     };
     const onEnd = () => fail(`CLI stdout ended before marker ${JSON.stringify(marker)}`);
     const onExit = (code: number | null, signal: NodeJS.Signals | null) =>
@@ -616,9 +632,11 @@ async function waitForChildStdoutMarker(
       fail(`CLI failed before marker ${JSON.stringify(marker)}: ${error.message}`, error);
 
     child.stdout.on("data", onData);
+    child.stderr.on("data", onStderr);
     child.stdout.once("end", onEnd);
     child.once("exit", onExit);
     child.stdout.once("error", onError);
+    child.stderr.once("error", onError);
     child.once("error", onError);
   });
 }
@@ -852,24 +870,35 @@ module.exports = {
         });
         const env: NodeJS.ProcessEnv = {
           ...state.env,
+          OPENCLAW_PROFILE: "auth-activate-process-test",
           AUTH_ACTIVATE_LIFECYCLE_PATH: lifecyclePath,
           OPENCLAW_NO_RESPAWN: "1",
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
           NODE_DISABLE_COMPILE_CACHE: "1",
         };
         let childPid: number | undefined;
-        const result = await runCliProcessChild({
-          nodeArgs: [...entrypoint, "models", "auth", "activate", profileId],
-          env,
-          interact: async (child) => {
-            childPid = child.pid;
-            child.stdin.end();
-            await assertNaturalExitAfterOutput(
-              child,
-              "Sign-in verified and saved. The running connection could not be confirmed.",
-            );
-          },
-        });
+        let result;
+        try {
+          result = await runCliProcessChild({
+            nodeArgs: [...entrypoint, "models", "auth", "activate", profileId],
+            env,
+            timeoutMs: 60_000,
+            interact: async (child) => {
+              childPid = child.pid;
+              child.stdin.end();
+              await assertNaturalExitAfterOutput(
+                child,
+                "Sign-in verified and saved. The running connection could not be confirmed.",
+              );
+            },
+          });
+        } catch (error) {
+          const lifecycle = await fs.readFile(lifecyclePath, "utf8").catch(() => "");
+          throw new Error(
+            `auth-activate process fixture failed\n--- lifecycle ---\n${lifecycle || "(empty)"}`,
+            { cause: error },
+          );
+        }
         expect(result.code, result.stderr).toBe(0);
         expect(result.signal).toBeNull();
         expect(result.stdout).toContain(`Inference verified: ${modelRef}`);

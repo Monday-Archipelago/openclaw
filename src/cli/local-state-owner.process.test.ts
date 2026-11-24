@@ -9,11 +9,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { WebSocketServer } from "ws";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
-import {
-  createOpenAiResponsesModelConfig,
-  startOpenAiResponsesModelServer,
-} from "../../test/helpers/openai-responses-model-fixture.js";
-import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
+import { isProcessAlive } from "../../test/helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createManagedWorktreeOwnerPolicy } from "../agents/worktrees/owner-protection.js";
 import { updateRegistryWorktree } from "../agents/worktrees/registry.js";
@@ -646,118 +642,224 @@ async function assertNaturalExitAfterOutput(
   timeoutMs = 5_000,
 ): Promise<void> {
   await waitForChildStdoutMarker(child, marker);
-  if (process.platform !== "win32") {
-    const tree = await captureCliProcessTree(child.pid);
-    const rows = processRows(tree);
-    expect(
-      rows.filter((row) => row.pid !== child.pid),
-      `descendant processes remained after final auth-activate output:\n${tree}`,
-    ).toEqual([]);
-  }
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return;
-  }
-  const exit = once(child, "exit");
-  let timer: NodeJS.Timeout | undefined;
-  const deadline = new Promise<never>((_, reject) => {
-    timer = setTimeout(
-      () => reject(new Error(`CLI did not exit within ${timeoutMs}ms after final output`)),
-      timeoutMs,
-    );
-    timer.unref();
-  });
-  try {
-    await Promise.race([exit, deadline]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
+  const descendants =
+    process.platform === "win32"
+      ? []
+      : processRows(await captureCliProcessTree(child.pid))
+          .filter((row) => row.pid !== child.pid)
+          .map((row) => row.pid);
+  if (child.exitCode === null && child.signalCode === null) {
+    const exit = once(child, "exit");
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`CLI did not exit within ${timeoutMs}ms after final output`)),
+        timeoutMs,
+      );
+      timer.unref();
+    });
+    try {
+      await Promise.race([exit, deadline]);
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
     }
   }
+  expect(
+    descendants.filter(isProcessAlive),
+    `descendant processes remained after auth-activate completion: ${descendants.join(", ")}`,
+  ).toEqual([]);
 }
 
 describe("models auth activate process lifecycle", () => {
-  it("activates a saved sign-in offline and exits naturally without descendants", async () => {
+  it("activates a plugin-owned saved sign-in offline and exits naturally", async () => {
     await withOpenClawTestState(
       { label: "models-auth-activate-process", applyEnv: false },
       async (state) => {
-        const providerId = "fixture";
-        const modelId = "test-model";
+        const pluginId = "auth-activate-runtime";
+        const providerId = "fixture-provider";
+        const modelId = "proof-model";
         const modelRef = `${providerId}/${modelId}`;
         const profileId = `${providerId}:setup-process`;
-        const key = "synthetic-auth-activate-key";
-        let requests = 0;
-        const provider = await startOpenAiResponsesModelServer({
-          modelId,
-          bindError: "Could not bind auth-activate fixture provider",
-          onRequest: async (request, response) => {
-            requests += 1;
-            expect(request.headers.authorization).toBe(`Bearer ${key}`);
-            request.resume();
-            await once(request, "end");
-            writeOpenAiResponsesText(response, {
-              text: "OK",
-              messageId: `msg_auth_activate_${requests}`,
-              responseId: `resp_auth_activate_${requests}`,
-            });
+        const pluginDir = state.statePath("pending-auth-runtime");
+        const lifecyclePath = state.statePath("auth-activate-lifecycle.jsonl");
+        await fs.mkdir(pluginDir, { recursive: true });
+        await fs.writeFile(
+          path.join(pluginDir, "package.json"),
+          JSON.stringify({
+            name: "@fixture/auth-activate-runtime",
+            version: "1.0.0",
+            type: "commonjs",
+            openclaw: { extensions: ["./index.cjs"] },
+          }),
+        );
+        await fs.writeFile(
+          path.join(pluginDir, "openclaw.plugin.json"),
+          JSON.stringify({
+            id: pluginId,
+            activation: { onAgentHarnesses: [pluginId] },
+            configSchema: { type: "object", properties: {}, additionalProperties: false },
+          }),
+        );
+        await fs.writeFile(
+          path.join(pluginDir, "index.cjs"),
+          `
+const fs = require("node:fs");
+const record = phase =>
+  fs.appendFileSync(process.env.AUTH_ACTIVATE_LIFECYCLE_PATH, JSON.stringify({ phase, pid: process.pid }) + "\\n");
+const assistant = {
+  role: "assistant",
+  content: [{ type: "text", text: "OK" }],
+  api: "openai-responses",
+  provider: ${JSON.stringify(providerId)},
+  model: ${JSON.stringify(modelId)},
+  usage: {
+    input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  },
+  stopReason: "stop",
+  timestamp: Date.now(),
+};
+module.exports = {
+  id: ${JSON.stringify(pluginId)},
+  register(api) {
+    record("register");
+    api.lifecycle.onDispose(() => record("dispose"));
+    api.registerAgentHarness({
+      id: ${JSON.stringify(pluginId)},
+      label: "Auth activate lifecycle fixture",
+      supports: ({ provider }) =>
+        provider === ${JSON.stringify(providerId)}
+          ? { supported: true, priority: 100 }
+          : { supported: false },
+      async runAttempt() {
+        record("attempt");
+        return {
+          terminal: { kind: "ok" },
+          sessionIdUsed: "auth-activate-proof-session",
+          messagesSnapshot: [assistant],
+          assistantTexts: ["OK"],
+          toolMetas: [],
+          lastAssistant: assistant,
+          didSendViaMessagingTool: false,
+          messagingToolSentTexts: [],
+          messagingToolSentMediaUrls: [],
+          messagingToolSentTargets: [],
+          cloudCodeAssistFormatError: false,
+          replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+          itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+          runtimeArtifact: { id: "fixture-runtime", fingerprint: "fixture-runtime-v1" },
+        };
+      },
+      runtimeArtifact: {
+        async validate(artifact) {
+          return artifact.id === "fixture-runtime" && artifact.fingerprint === "fixture-runtime-v1";
+        },
+      },
+    });
+  },
+};
+`,
+        );
+        const savedConfig = {
+          plugins: {
+            allow: [pluginId],
+            entries: { [pluginId]: { enabled: true } },
+            slots: { memory: "none" },
+            installs: {
+              [pluginId]: {
+                source: "path",
+                sourcePath: pluginDir,
+                installPath: pluginDir,
+              },
+            },
+          },
+          agents: {
+            defaults: {
+              workspace: state.workspaceDir,
+              skipBootstrap: true,
+              skills: [],
+              models: { [modelRef]: { agentRuntime: { id: pluginId } } },
+            },
+          },
+          models: {
+            mode: "replace",
+            providers: {
+              [providerId]: {
+                api: "openai-responses",
+                baseUrl: "https://example.invalid/v1",
+                models: [
+                  {
+                    id: modelId,
+                    name: "Lifecycle fixture",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 32_000,
+                    maxTokens: 1_000,
+                  },
+                ],
+              },
+            },
+          },
+        };
+        await state.writeConfig({
+          plugins: { slots: { memory: "none" } },
+          agents: {
+            defaults: {
+              workspace: state.workspaceDir,
+              skipBootstrap: true,
+              skills: [],
+            },
           },
         });
-        try {
-          const savedConfig = createOpenAiResponsesModelConfig({
-            baseUrl: provider.baseUrl,
-            providerId,
-            modelId,
-            reasoning: false,
-            toolProfile: "minimal",
-          });
-          await state.writeConfig({
-            plugins: { slots: { memory: "none" } },
-            agents: {
-              defaults: {
-                workspace: state.workspaceDir,
-                skipBootstrap: true,
-                skills: [],
+        await state.writeAuthProfiles({
+          version: 1,
+          profiles: {
+            [profileId]: {
+              type: "api_key",
+              provider: providerId,
+              key: "synthetic-auth-activate-key",
+              setup: {
+                replacement: false,
+                modelRef,
+                configJson: JSON.stringify(savedConfig),
+                pluginId,
+                agentRuntimeId: pluginId,
               },
             },
-          });
-          await state.writeAuthProfiles({
-            version: 1,
-            profiles: {
-              [profileId]: {
-                type: "api_key",
-                provider: providerId,
-                key,
-                setup: {
-                  replacement: false,
-                  modelRef,
-                  configJson: JSON.stringify(savedConfig),
-                },
-              },
-            },
-          });
-          const env: NodeJS.ProcessEnv = {
-            ...state.env,
-            OPENCLAW_NO_RESPAWN: "1",
-            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-            NODE_DISABLE_COMPILE_CACHE: "1",
-          };
-          const result = await runCliProcessChild({
-            nodeArgs: [...entrypoint, "models", "auth", "activate", profileId],
-            env,
-            interact: async (child) => {
-              child.stdin.end();
-              await assertNaturalExitAfterOutput(
-                child,
-                "Sign-in verified and saved. The running connection could not be confirmed.",
-              );
-            },
-          });
-          expect(result.code, result.stderr).toBe(0);
-          expect(result.signal).toBeNull();
-          expect(result.stdout).toContain(`Inference verified: ${modelRef}`);
-          expect(requests).toBeGreaterThan(0);
-        } finally {
-          await provider.close();
-        }
+          },
+        });
+        const env: NodeJS.ProcessEnv = {
+          ...state.env,
+          AUTH_ACTIVATE_LIFECYCLE_PATH: lifecyclePath,
+          OPENCLAW_NO_RESPAWN: "1",
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          NODE_DISABLE_COMPILE_CACHE: "1",
+        };
+        const result = await runCliProcessChild({
+          nodeArgs: [...entrypoint, "models", "auth", "activate", profileId],
+          env,
+          interact: async (child) => {
+            child.stdin.end();
+            await assertNaturalExitAfterOutput(
+              child,
+              "Sign-in verified and saved. The running connection could not be confirmed.",
+            );
+          },
+        });
+        expect(result.code, result.stderr).toBe(0);
+        expect(result.signal).toBeNull();
+        expect(result.stdout).toContain(`Inference verified: ${modelRef}`);
+        const lifecycle = (await fs.readFile(lifecyclePath, "utf8"))
+          .trim()
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => JSON.parse(line) as { phase: string; pid: number });
+        expect(lifecycle.map(({ phase }) => phase)).toContain("attempt");
+        expect(lifecycle.map(({ phase }) => phase)).toContain("dispose");
+        expect(new Set(lifecycle.map(({ pid }) => pid))).toEqual(new Set([result.pid]));
       },
     );
   });

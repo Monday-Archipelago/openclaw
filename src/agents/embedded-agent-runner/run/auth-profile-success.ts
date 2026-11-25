@@ -103,6 +103,19 @@ export function reportEmbeddedRunSuccessfulAuthBinding(input: {
   if (delegated && (!projection || projection.provider !== input.provider)) {
     throw new ScopedOAuthDelegationError("unusable");
   }
+  if (projection) {
+    const auth = input.apiKeyInfo;
+    const resolvedAccess = auth?.apiKey && looksLikeSecretSentinel(auth.apiKey)
+      ? resolveSecretSentinel(auth.apiKey)
+      : auth?.apiKey;
+    const matchesResolved = auth?.profileId === projection.profileId &&
+      auth.mode === "oauth" && auth.authFlow === projection.authFlow &&
+      resolvedAccess === projection.access;
+    const matchesHarness = input.attempt.authBindingFingerprint === projection.authFingerprint;
+    if (input.pluginHarnessOwnsTransport ? !matchesHarness : !matchesResolved) {
+      throw new ScopedOAuthDelegationError("key-domain-mismatch");
+    }
+  }
   const credential = !delegated && input.profileId ? input.profileStore.profiles[input.profileId] : undefined;
   const pluginHarnessApiKeyInfo = resolvePluginHarnessApiKeyInfo(input);
   const authFingerprint = projection?.authFingerprint ?? (

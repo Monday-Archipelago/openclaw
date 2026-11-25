@@ -306,6 +306,11 @@ export async function createCodexInferenceProxy(params: {
             auditContext: "codex-parent-local-inference",
           });
           assertAuthorized();
+          if (guarded.response.status === 401 && params.oauth?.nonRefreshable) {
+            // A delegate may not refresh or replay an auth-rejected request.
+            await params.oauth.resolve(true);
+            throw new Error(FAILURE);
+          }
           if (!upload.retry || guarded.response.status !== 401 || attempt === 1) {
             upload.commit?.();
             break;

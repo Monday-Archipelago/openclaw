@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { fingerprintAuthProfileCredential } from "../execution-auth-binding.js";
 import { createFailedOAuthRefreshFence, createOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import {
+  closeScopedOAuthDelegation,
   createScopedOAuthDelegation,
   hasScopedOAuthCandidate,
   resolveScopedOAuthAccess,
@@ -145,6 +146,13 @@ describe("scoped OAuth delegation", () => {
     }
     const foreign = JSON.parse(JSON.stringify(scopeFor(credential()))) as ScopedOAuthDelegation;
     expectDenial(() => hasScopedOAuthCandidate(foreign, selection.profileId), "key-domain-mismatch");
+  });
+
+  it("retires captured capabilities on scope exit", () => {
+    const scope = scopeFor(credential());
+    resolveScopedOAuthAccess(scope, selection);
+    closeScopedOAuthDelegation(scope);
+    expectDenial(() => resolveScopedOAuthAccess(scope, selection), "key-domain-mismatch");
   });
 
   it("retains rejected admission and rejects ambiguous duplicate profile IDs", () => {

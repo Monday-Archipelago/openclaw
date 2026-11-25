@@ -321,7 +321,7 @@ export async function resolvePreparedRuntimeModelAuth(
         plan: applyResolvedAuthToPlan({ plan, auth, candidates: currentCandidates }),
       };
     } catch (error) {
-      if (error instanceof SecretSurfaceUnavailableError) {
+      if (error instanceof ScopedOAuthDelegationError || error instanceof SecretSurfaceUnavailableError) {
         throw error;
       }
       if (!refreshFailure && error instanceof OAuthRefreshFailureError) {

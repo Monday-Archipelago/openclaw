@@ -1,3 +1,5 @@
+import { getScopedOAuthCandidate } from "./auth-profiles/runtime-scope.js";
+import { ScopedOAuthDelegationError } from "./auth-profiles/scoped-oauth-delegation.js";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -104,7 +106,7 @@ function resolveModelAuthModeFromStore(
   const profiles = listProfilesForProvider(authStore, resolved);
   const modes = new Set(
     profiles
-      .map((id) => authStore.profiles[id]?.type)
+      .map((id) => getScopedOAuthCandidate(id) ? "oauth" : authStore.profiles[id]?.type)
       .filter((mode) => mode === "oauth" || mode === "token" || mode === "api_key"),
   );
   if (modes.size >= 2) {
@@ -217,13 +219,14 @@ export async function hasAvailableAuthForProvider(params: {
       ) {
         return true;
       }
-      const candidateCredential = store.profiles[candidate];
-      const candidateType = candidateCredential?.type;
+      const delegated = getScopedOAuthCandidate(candidate);
+      const candidateCredential = delegated ? undefined : store.profiles[candidate];
+      const candidateType = delegated ? "oauth" : candidateCredential?.type;
       if (
         candidateType &&
         !allowsAuth(
           authConfig.profileTypeToAuthMode(candidateType),
-          candidateCredential?.type === "oauth" ? candidateCredential.authFlow : undefined,
+          delegated?.authFlow ?? (candidateCredential?.type === "oauth" ? candidateCredential.authFlow : undefined),
         )
       ) {
         continue;
@@ -240,12 +243,13 @@ export async function hasAvailableAuthForProvider(params: {
         resolved &&
         allowsAuth(
           mode ? authConfig.profileTypeToAuthMode(mode) : "api-key",
-          credential?.type === "oauth" ? credential.authFlow : undefined,
+          resolved.authFlow ?? (credential?.type === "oauth" ? credential.authFlow : undefined),
         )
       ) {
         return true;
       }
     } catch (err) {
+      if (err instanceof ScopedOAuthDelegationError) { throw err; }
       log.debug?.(`auth profile "${candidate}" failed for provider "${provider}": ${String(err)}`);
     }
   }

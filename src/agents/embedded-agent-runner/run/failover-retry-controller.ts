@@ -1,3 +1,4 @@
+import { getScopedOAuthCandidate } from "../../auth-profiles/runtime-scope.js";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { sleepWithAbort } from "../../../infra/backoff.js";
 import { emitDiagnosticsTimelineEvent } from "../../../infra/diagnostics-timeline.js";
@@ -142,7 +143,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
         runtimeOwnerId: preparedRuntime.snapshot().agentHarness.id,
       });
     }
-    if (params.authProfileStateMode === "read-only" || !reason) {
+    if (params.authProfileStateMode === "read-only" || !reason || getScopedOAuthCandidate(profileId)) {
       return;
     }
     if (preparedRuntime.snapshot().pluginHarnessOwnsTransport && reason === "timeout") {

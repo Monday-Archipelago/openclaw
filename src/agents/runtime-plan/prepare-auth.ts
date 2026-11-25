@@ -1,3 +1,4 @@
+import { getScopedOAuthCandidate } from "../auth-profiles/runtime-scope.js";
 /**
  * Prepares route-aware auth forwarding for auxiliary agent-runtime calls.
  * Callers supply an already loaded credential snapshot; this module never
@@ -212,7 +213,8 @@ function resolveProfile(
   profileId: string,
   options: { ignoreCooldown?: boolean } = {},
 ): ProviderModelAuthProfileSource {
-  const credential = params.authProfileStore?.profiles[profileId];
+  const delegated = getScopedOAuthCandidate(profileId);
+  const credential = delegated ? undefined : params.authProfileStore?.profiles[profileId];
   const configured = params.config?.auth?.profiles?.[profileId];
   const availability = credential
     ? resolveStoredCredentialReadOnlyAvailability({
@@ -221,12 +223,12 @@ function resolveProfile(
         env: params.env ?? process.env,
       })
     : undefined;
-  const authFlow = credential?.type === "oauth" ? credential.authFlow : undefined;
+  const authFlow = delegated?.authFlow ?? (credential?.type === "oauth" ? credential.authFlow : undefined);
   const policy =
-    credential?.type === "oauth" && authFlow
+    (delegated || credential?.type === "oauth") && authFlow
       ? resolveProviderModelAuthPolicy({
-          provider: credential.provider,
-          mode: credential.type,
+          provider: delegated?.provider ?? credential!.provider,
+          mode: "oauth",
           authFlow,
         })
       : undefined;
@@ -235,8 +237,8 @@ function resolveProfile(
   return {
     kind: "profile",
     profileId,
-    provider: credential?.provider ?? configured?.provider,
-    mode: credential?.type ?? configured?.mode,
+    provider: delegated?.provider ?? credential?.provider ?? configured?.provider,
+    mode: delegated ? "oauth" : credential?.type ?? configured?.mode,
     ...(authFlow ? { authFlow, authRequirement: policy?.authRequirement } : {}),
     // Runtime materialization owns secret readiness; only proven-invalid facts are terminal here.
     readiness:
@@ -539,8 +541,12 @@ export function prepareAgentRuntimeAuth(
             allowPluginNormalization: false,
           })
         : undefined,
-    resolveProfileAuthMode: (profileId) => params.authProfileStore?.profiles[profileId]?.type,
+    resolveProfileAuthMode: (profileId) => getScopedOAuthCandidate(profileId) ? "oauth" : params.authProfileStore?.profiles[profileId]?.type,
     resolveProfileAuthFlow: (profileId) => {
+      const delegated = getScopedOAuthCandidate(profileId);
+      if (delegated) {
+        return delegated.authFlow;
+      }
       const credential = params.authProfileStore?.profiles[profileId];
       return credential?.type === "oauth" ? credential.authFlow : undefined;
     },

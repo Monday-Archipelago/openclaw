@@ -1,3 +1,4 @@
+import { listScopedOAuthCandidates, resolveScopedOAuthAccess, type ScopedOAuthDelegation } from "./scoped-oauth-delegation.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { isMainThread } from "node:worker_threads";
@@ -11,9 +12,30 @@ import type { AuthProfileStore } from "./types.js";
 
 type AuthProfileRuntimeMode =
   | { kind: "env-only" }
-  | { kind: "agent-dir"; agentDir: string; sharedStore?: AuthProfileStore; env: NodeJS.ProcessEnv };
+  | { kind: "agent-dir"; agentDir: string; sharedStore?: AuthProfileStore; env: NodeJS.ProcessEnv; oauthDelegation?: ScopedOAuthDelegation };
 
 export const authProfileRuntimeMode = new AsyncLocalStorage<AuthProfileRuntimeMode>();
+
+export function getScopedOAuthDelegation(): ScopedOAuthDelegation | undefined {
+  const mode = authProfileRuntimeMode.getStore();
+  return mode?.kind === "agent-dir" ? mode.oauthDelegation : undefined;
+}
+
+export function getScopedOAuthCandidates() {
+  const scope = getScopedOAuthDelegation();
+  return scope ? listScopedOAuthCandidates(scope) : [];
+}
+
+export function getScopedOAuthCandidate(profileId: string | undefined) {
+  return profileId ? getScopedOAuthCandidates().find((entry) => entry.profileId === profileId) : undefined;
+}
+
+/** Resolve only a marked candidate, before any persisted credential or fallback path. */
+export function resolveScopedOAuthAccessForProfile(profileId: string, forceRefresh = false) {
+  const candidate = getScopedOAuthCandidate(profileId);
+  const scope = getScopedOAuthDelegation();
+  return scope && candidate ? resolveScopedOAuthAccess(scope, { ...candidate, forceRefresh }) : undefined;
+}
 
 type WorkerAuthProfileWrites = {
   env: NodeJS.ProcessEnv;

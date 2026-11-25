@@ -1,3 +1,4 @@
+import { ScopedOAuthDelegationError } from "../auth-profiles/scoped-oauth-delegation.js";
 /** Resolves credentials for an immutable prepared runtime route. */
 import { toErrorObject } from "../../infra/errors.js";
 import { SecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
@@ -123,6 +124,7 @@ export async function resolvePreparedRuntimeAuthAttempts<Model, Auth>(params: {
       return { model, plan: resolved.plan, auth: resolved.auth };
     } catch (error) {
       if (
+        error instanceof ScopedOAuthDelegationError ||
         error instanceof SecretSurfaceUnavailableError ||
         error instanceof OAuthRefreshFailureError
       ) {

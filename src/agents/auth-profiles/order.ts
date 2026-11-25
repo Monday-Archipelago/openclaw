@@ -1,3 +1,4 @@
+import { getScopedOAuthCandidate, getScopedOAuthCandidates } from "./runtime-scope.js";
 /**
  * Auth profile ordering and eligibility.
  * Resolves configured/stored auth order, provider aliases, cooldowns, and
@@ -103,6 +104,18 @@ export function resolveAuthProfileEligibility(params: {
   includePendingOAuthRefresh?: boolean;
 }): AuthProfileEligibility {
   const { matchesStoredProvider } = prepareProviderCompatibility(params);
+  const delegated = getScopedOAuthCandidate(params.profileId);
+  if (delegated) {
+    const configured = params.cfg?.auth?.profiles?.[params.profileId];
+    if (!matchesStoredProvider(delegated.provider) || (configured && !matchesStoredProvider(configured.provider))) {
+      return { eligible: false, reasonCode: "provider_mismatch" };
+    }
+    if (configured && configured.mode !== "oauth" && configured.mode !== "token") {
+      return { eligible: false, reasonCode: "mode_mismatch" };
+    }
+    // A denied marked candidate must reach the typed resolver, not be silently filtered out.
+    return { eligible: true, reasonCode: "ok" };
+  }
   const cred = params.store.profiles[params.profileId];
   if (!cred) {
     if (
@@ -211,7 +224,10 @@ export function resolveAuthProfileOrderWithMetadata(
       .filter(([, profile]) => matchesStoredProvider(profile.provider))
       .map(([profileId]) => profileId);
   const explicitProfiles = compatibleProfileIds(cfg?.auth?.profiles ?? {});
-  const storeProfiles = compatibleProfileIds(store.profiles);
+  const storeProfiles = dedupeProfileIds([
+    ...compatibleProfileIds(store.profiles),
+    ...getScopedOAuthCandidates().filter((candidate) => matchesStoredProvider(candidate.provider)).map((candidate) => candidate.profileId),
+  ]);
   const baseOrder =
     explicitOrder ?? (explicitProfiles.length > 0 ? explicitProfiles : storeProfiles);
   if (baseOrder.length === 0) {
@@ -239,7 +255,7 @@ export function resolveAuthProfileOrderWithMetadata(
   // Repair stored-order and config-profile drift from older setup flows:
   // bare config auth.order is a hard constraint, but configured profile ids
   // can drift from their stored credential ids and still need repair.
-  const allBaseProfilesMissing = baseOrder.every((profileId) => !store.profiles[profileId]);
+  const allBaseProfilesMissing = baseOrder.every((profileId) => !store.profiles[profileId] && !getScopedOAuthCandidate(profileId));
   if (
     filtered.length === 0 &&
     allBaseProfilesMissing &&
@@ -291,7 +307,7 @@ function orderProfilesByMode(order: string[], store: AuthProfileStore, now: numb
   // Sort by type, OAuth expiry state, then lastUsed for round-robin within each tier.
   const scored = order.map((profileId) => {
     const profile = store.profiles[profileId];
-    const type = profile?.type;
+    const type = getScopedOAuthCandidate(profileId) ? "oauth" : profile?.type;
     const typeScore = type === "oauth" ? 0 : type === "token" ? 1 : type === "api_key" ? 2 : 3;
     // A refreshable expired OAuth profile remains eligible, but refreshing an
     // obsolete profile can rotate a one-time refresh token while a live peer exists.

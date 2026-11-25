@@ -1,3 +1,5 @@
+import { getScopedOAuthCandidate, resolveScopedOAuthAccessForProfile } from "./runtime-scope.js";
+import { ScopedOAuthDelegationError } from "./scoped-oauth-delegation.js";
 /**
  * Auth profile API-key/OAuth runtime resolver.
  * Converts selected auth profiles into provider API keys, refreshes OAuth
@@ -82,6 +84,7 @@ type ResolveApiKeyForProfileResult = {
   email?: string;
   profileId: string;
   profileType: AuthProfileCredential["type"];
+  authFlow?: string;
   credential?: AuthProfileCredential;
   /** Retained credential authority; null denotes a runtime-only credential. */
   readCurrentCredential: (() => AuthProfileCredential | undefined) | null;
@@ -96,7 +99,7 @@ function buildApiKeyProfileResult(
     provider: params.provider,
     email: params.email,
   };
-  for (const key of ["profileId", "profileType", "credential", "readCurrentCredential"] as const) {
+  for (const key of ["profileId", "profileType", "authFlow", "credential", "readCurrentCredential"] as const) {
     Object.defineProperty(result, key, {
       value: key === "readCurrentCredential" ? (params[key] ?? null) : params[key],
       enumerable: false,
@@ -240,6 +243,10 @@ async function tryResolveOAuthProfile(
   params: ResolveApiKeyForProfileParams,
 ): Promise<ResolveApiKeyForProfileResult | null> {
   const { cfg, store, profileId } = params;
+  const delegated = resolveDelegatedOAuthProfile(params);
+  if (delegated) {
+    return delegated;
+  }
   if (profileId === CLAUDE_CLI_PROFILE_ID) {
     return null;
   }
@@ -317,6 +324,26 @@ function resolveRuntimeAuthProfile(params: {
   };
 }
 
+function resolveDelegatedOAuthProfile(params: ResolveApiKeyForProfileParams): ResolveApiKeyForProfileResult | undefined {
+  const candidate = getScopedOAuthCandidate(params.profileId);
+  if (!candidate) {
+    return undefined;
+  }
+  const projection = resolveScopedOAuthAccessForProfile(params.profileId, params.forceRefresh);
+  if (!projection || params.profileId === CLAUDE_CLI_PROFILE_ID ||
+      params.validateOAuthCredential ||
+      !isProfileConfigCompatible({ cfg: params.cfg, profileId: params.profileId, provider: candidate.provider, mode: "oauth" })) {
+    throw new ScopedOAuthDelegationError("unusable");
+  }
+  return buildApiKeyProfileResult({
+    apiKey: projection.access,
+    provider: projection.provider,
+    profileId: projection.profileId,
+    profileType: "oauth",
+    authFlow: projection.authFlow,
+  });
+}
+
 /** Resolve a selected auth profile into the provider API key string. */
 export async function resolveApiKeyForProfile(
   params: ResolveApiKeyForProfileParams,
@@ -324,6 +351,10 @@ export async function resolveApiKeyForProfile(
   // Credential and degraded-owner lookups must share the store read's bounded auth scope.
   const scopedParams = { ...params, agentDir: resolveRuntimeAuthProfileAgentDir(params.agentDir) };
   params.signal?.throwIfAborted();
+  const delegated = resolveDelegatedOAuthProfile(params);
+  if (delegated) {
+    return delegated;
+  }
   const resolved = isUserModelAuthProfileId(params.profileId)
     ? ((await withPersonalAuthProfileStore(params.profileId, (owner) =>
         resolveApiKeyForProfileOwned(scopedParams, owner),
@@ -433,7 +464,7 @@ async function resolveApiKeyForProfileOwned(
     return resolved;
   } catch (error) {
     params.signal?.throwIfAborted();
-    if (hasSqliteWorkerOutcomeUnknown(error)) {
+    if (error instanceof ScopedOAuthDelegationError || hasSqliteWorkerOutcomeUnknown(error)) {
       throw error;
     }
     let settlementComplete = isSettledOAuthRefreshFailure(error);

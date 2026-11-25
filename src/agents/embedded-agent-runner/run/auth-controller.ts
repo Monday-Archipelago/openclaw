@@ -1,3 +1,5 @@
+import { getScopedOAuthCandidate, resolveScopedOAuthAccessForProfile } from "../../auth-profiles/runtime-scope.js";
+import { ScopedOAuthDelegationError } from "../../auth-profiles/scoped-oauth-delegation.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { Model } from "../../../llm/types.js";
@@ -577,6 +579,18 @@ export function createEmbeddedRunAuthController(params: {
     const sourceApiKey = apiKeyInfo.apiKey || "__aws_sdk_auth__";
     const profileId = usesAwsSdkChain ? (apiKeyInfo.profileId ?? candidate) : apiKeyInfo.profileId;
     let runtimeAuthHandled = false;
+    if (getScopedOAuthCandidate(profileId)) {
+      // Delegated access cannot enter the provider-owned refresh/exchange scheduler.
+      const current = resolveScopedOAuthAccessForProfile(profileId!);
+      if (!current || current.access !== sourceApiKey) {
+        throw new ScopedOAuthDelegationError("stale");
+      }
+      clearRuntimeAuthRefreshTimer();
+      params.authStorage.setRuntimeApiKey(runtimeModel.provider, current.access);
+      state.runtimeAuthState = null;
+      state.lastProfileId = profileId;
+      return;
+    }
     try {
       const preparedAuth = await prepareRuntimeAuthForModel({
         runtimeModel,
@@ -637,7 +651,7 @@ export function createEmbeddedRunAuthController(params: {
         params.attemptedThinking.clear();
         return true;
       } catch (err) {
-        if (authSignal.aborted || err instanceof SecretSurfaceUnavailableError) {
+        if (authSignal.aborted || err instanceof ScopedOAuthDelegationError || err instanceof SecretSurfaceUnavailableError) {
           throw err;
         }
         await recordOAuthRefreshFailure(candidate, err);
@@ -664,6 +678,7 @@ export function createEmbeddedRunAuthController(params: {
     } catch (err) {
       if (
         authSignal.aborted ||
+        err instanceof ScopedOAuthDelegationError ||
         err instanceof FailoverError ||
         err instanceof SecretSurfaceUnavailableError
       ) {
@@ -685,6 +700,10 @@ export function createEmbeddedRunAuthController(params: {
       return false;
     }
     try {
+      if (state.lastProfileId && getScopedOAuthCandidate(state.lastProfileId)) {
+        resolveScopedOAuthAccessForProfile(state.lastProfileId, true);
+        throw new ScopedOAuthDelegationError("force-refresh");
+      }
       if (state.runtimeAuthState) {
         await refreshRuntimeAuth("auth-error");
         scheduleRuntimeAuthRefresh();
@@ -701,7 +720,7 @@ export function createEmbeddedRunAuthController(params: {
       }
       return true;
     } catch (error) {
-      if (authSignal.aborted) {
+      if (authSignal.aborted || error instanceof ScopedOAuthDelegationError) {
         throw error;
       }
       return false;

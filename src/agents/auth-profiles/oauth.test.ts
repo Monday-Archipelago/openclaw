@@ -296,3 +296,28 @@ describe("setup-owned SecretRef materialization", () => {
     },
   );
 });
+
+// The temporary scope must resolve the marker before a durable row or refresh adapter.
+it("delegates a scoped OAuth profile without a stored row or refresh side effects", async () => {
+  const { authProfileRuntimeMode } = await import("./runtime-scope.js");
+  const { createScopedOAuthDelegation, ScopedOAuthDelegationError } = await import("./scoped-oauth-delegation.js");
+  const profileId = "openai:delegated";
+  const store: AuthProfileStore = { version: 1, profiles: {} };
+  const credential: AuthProfileCredential = { type: "oauth", provider: "openai", access: "synthetic-access", refresh: "synthetic-refresh", expires: Date.now() + 60_000, authFlow: "chatgpt-token-sharing" };
+  let current = true;
+  const oauthDelegation = createScopedOAuthDelegation([{ profileId, provider: "openai", credential, assertCurrent: () => current ? "current" : "stale" }]);
+  await authProfileRuntimeMode.run({ kind: "agent-dir", agentDir: "/synthetic", env: {}, oauthDelegation }, async () => {
+    const resolved = await resolveApiKeyForProfile({ store, profileId });
+    expect(resolved?.apiKey).toBe(credential.access);
+    expect(resolved?.profileType).toBe("oauth");
+    expect(resolved?.authFlow).toBe("chatgpt-token-sharing");
+    expect(resolved?.credential).toBeUndefined();
+    expect(resolved?.readCurrentCredential).toBeNull();
+    await expect(resolveApiKeyForProfile({ store, profileId, forceRefresh: true })).rejects.toBeInstanceOf(ScopedOAuthDelegationError);
+    current = false;
+    await expect(resolveApiKeyForProfile({ store, profileId })).rejects.toMatchObject({ reason: "stale" });
+    expect(store.profiles).toEqual({});
+    expect(resolveProviderOAuthCredentialWithPlugin).not.toHaveBeenCalled();
+  });
+  expect(await resolveApiKeyForProfile({ store, profileId })).toBeNull();
+});

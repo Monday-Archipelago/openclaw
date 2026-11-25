@@ -158,10 +158,10 @@ export async function withAuthProfileStoreAgentDir<T>(
   const env = { ...process.env, OPENCLAW_STATE_DIR: sharedStateDir };
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const resolvedAgentDir = resolveUserPath(agentDir, env);
-  const { sharedStore, assertCurrent } = await prepareScopedSharedAuthProfileStore(env);
+  const { sharedStore, oauthDelegation, assertCurrent } = await prepareScopedSharedAuthProfileStore(env);
   assertCurrent();
   return await authProfileRuntimeMode.run(
-    { kind: "agent-dir", agentDir: resolvedAgentDir, sharedStore, env },
+    { kind: "agent-dir", agentDir: resolvedAgentDir, sharedStore, oauthDelegation, env },
     run,
   );
 }

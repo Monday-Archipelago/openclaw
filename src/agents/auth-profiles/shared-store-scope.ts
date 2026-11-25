@@ -1,3 +1,6 @@
+import { CLAUDE_CLI_PROFILE_ID } from "./constants.js";
+import { captureScopedOAuthAuthorityAssertion, fingerprintScopedOAuthGeneration, readScopedOAuthAuthority } from "./scoped-oauth-authority.js";
+import { createScopedOAuthDelegation, type ScopedOAuthDelegation } from "./scoped-oauth-delegation.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { captureAuthProfileCredentialAuthority } from "../../state/user-model-account-authority.js";
 import {
@@ -15,17 +18,48 @@ import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 /** Prepare the shared read-through view; the scope owner validates it immediately before entry. */
 export async function prepareScopedSharedAuthProfileStore(env: NodeJS.ProcessEnv): Promise<{
   sharedStore: AuthProfileStore | undefined;
+  oauthDelegation?: ScopedOAuthDelegation;
   assertCurrent: () => void;
 }> {
   const context = captureOpenClawStateWorkerContext({ env });
   const ownership = await resolveSharedAuthStoreOwnershipAsync(context);
   let sharedStore: AuthProfileStore | undefined;
+  let oauthDelegation: ScopedOAuthDelegation | undefined;
+  const assertCurrent = () => {
+    context.admission.assertCurrent();
+    context.maintenanceScope?.assertAdmission();
+    if (resolveSharedAuthStoreOwnership(env).location !== ownership.location) {
+      throw new Error("Shared auth store ownership changed during scope preparation; retry the operation.");
+    }
+  };
   if (ownership.location === "state-db") {
     sharedStore =
       loadPersistedAuthProfileStoreFromRows(
         await readSharedAuthProfileRows(context),
         context.admission.databasePath,
       ) ?? createEmptyAuthProfileStore();
+    const candidates = Object.entries(sharedStore.profiles).flatMap(([profileId, credential]) => {
+      if (credential.type !== "oauth") {
+        return [];
+      }
+      // The first supported transport is the existing ChatGPT token-sharing bearer path.
+      // Other OAuth families may require provider-specific formatting or native login.
+      // Retain their marker but deny delegation instead of guessing or refreshing.
+      const supported = credential.provider === "openai" &&
+        credential.authFlow === "chatgpt-token-sharing" &&
+        profileId !== CLAUDE_CLI_PROFILE_ID && credential.copyToAgents !== false;
+      const read = () => {
+        assertCurrent();
+        return readScopedOAuthAuthority(env, profileId);
+      };
+      const generation = fingerprintScopedOAuthGeneration(profileId, credential);
+      return [{ profileId, provider: credential.provider, credential,
+        assertCurrent: supported ? captureScopedOAuthAuthorityAssertion(generation, read) : () => "stale" as const,
+      }];
+    });
+    if (candidates.length) {
+      oauthDelegation = createScopedOAuthDelegation(candidates);
+    }
     // Temporary runs must not acquire a second OAuth refresh owner. This view
     // stays inside the operation scope and is never persisted into an agent store.
     sharedStore.profiles = Object.fromEntries(
@@ -38,15 +72,8 @@ export async function prepareScopedSharedAuthProfileStore(env: NodeJS.ProcessEnv
   }
   return {
     sharedStore,
-    assertCurrent() {
-      context.admission.assertCurrent();
-      context.maintenanceScope?.assertAdmission();
-      if (resolveSharedAuthStoreOwnership(env).location !== ownership.location) {
-        throw new Error(
-          "Shared auth store ownership changed during scope preparation; retry the operation.",
-        );
-      }
-    },
+    oauthDelegation,
+    assertCurrent,
   };
 }
 

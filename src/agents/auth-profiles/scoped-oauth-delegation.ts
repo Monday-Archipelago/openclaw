@@ -1,3 +1,4 @@
+import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import { fingerprintAuthProfileCredential } from "../execution-auth-binding.js";
 import { resolveTokenExpiryState } from "./credential-state.js";
 import { isOAuthRefreshFence } from "./oauth-refresh-marker.js";
@@ -20,6 +21,7 @@ export class ScopedOAuthDelegationError extends Error {
       "Gateway-owned OAuth delegation is unavailable; refresh the sign-in through its owner or retry. No credential was changed.",
     );
     this.name = "ScopedOAuthDelegationError";
+    recordModelFallbackStop(this);
   }
 }
 
@@ -63,12 +65,19 @@ const scopeBrand: unique symbol = Symbol("scoped-oauth-delegation");
 /** Opaque, process-local runtime capability. Serialization cannot preserve it. */
 export type ScopedOAuthDelegation = { readonly [scopeBrand]: true };
 
+export type ScopedOAuthCandidateMetadata = Readonly<{
+  profileId: string;
+  provider: string;
+  authFlow?: string;
+}>;
+
 type Candidate =
-  | { reason: ScopedOAuthDelegationReason; provider: string }
+  | { reason: ScopedOAuthDelegationReason; provider: string; authFlow?: string }
   | {
       projection: ScopedOAuthAccessProjection;
       assertCurrent: ScopedOAuthAuthorityAssertion;
       provider: string;
+      authFlow?: string;
     };
 
 const scopes = new WeakMap<ScopedOAuthDelegation, ReadonlyMap<string, Candidate>>();
@@ -113,8 +122,9 @@ export function createScopedOAuthDelegation(
 ): ScopedOAuthDelegation {
   const entries = new Map<string, Candidate>();
   for (const { profileId, provider, credential, assertCurrent } of candidates) {
+    const authFlow = credential?.authFlow;
     if (entries.has(profileId)) {
-      entries.set(profileId, { provider, reason: "unusable" });
+      entries.set(profileId, { provider, authFlow, reason: "unusable" });
       continue;
     }
     try {
@@ -145,10 +155,11 @@ export function createScopedOAuthDelegation(
         credential.accountId,
         proof,
       );
-      entries.set(profileId, { provider, projection, assertCurrent });
+      entries.set(profileId, { provider, authFlow, projection, assertCurrent });
     } catch (error) {
       entries.set(profileId, {
         provider,
+        authFlow,
         reason: error instanceof ScopedOAuthDelegationError ? error.reason : "unusable",
       });
     }
@@ -169,6 +180,15 @@ function readScope(scope: ScopedOAuthDelegation): ReadonlyMap<string, Candidate>
 /** Check before the ordinary missing-profile branch; rejected candidates still match. */
 export function hasScopedOAuthCandidate(scope: ScopedOAuthDelegation, profileId: string): boolean {
   return readScope(scope).has(profileId);
+}
+
+/** Non-secret selection metadata, including rejected candidates. */
+export function listScopedOAuthCandidates(scope: ScopedOAuthDelegation): ScopedOAuthCandidateMetadata[] {
+  return [...readScope(scope)].map(([profileId, { provider, authFlow }]) => ({
+    profileId,
+    provider,
+    authFlow,
+  }));
 }
 
 function requireCurrentProjection(

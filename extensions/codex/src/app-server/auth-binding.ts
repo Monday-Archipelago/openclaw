@@ -1,3 +1,4 @@
+import { getScopedOAuthCandidate, resolveScopedOAuthAccessForProfile, ScopedOAuthDelegationError } from "openclaw/plugin-sdk/agent-runtime";
 import {
   fingerprintResolvedAuthProfileCredential,
   type AgentHarnessAuthBindingFingerprintParams,
@@ -18,6 +19,15 @@ type CodexAppServerPreparedAuthBinding = {
 export async function prepareCodexAppServerAuthBinding(
   params: AgentHarnessAuthBindingFingerprintParams,
 ): Promise<CodexAppServerPreparedAuthBinding | undefined> {
+  if (getScopedOAuthCandidate(params.authProfileId)) {
+    const projection = resolveScopedOAuthAccessForProfile(params.authProfileId);
+    if (!projection || projection.provider !== "openai" || projection.authFlow !== "chatgpt-token-sharing") {
+      throw new ScopedOAuthDelegationError("unusable");
+    }
+    const store = structuredClone(params.authProfileStore);
+    delete store.profiles[params.authProfileId];
+    return { fingerprint: projection.authFingerprint, authProfileStore: store };
+  }
   const credential = params.authProfileStore.profiles[params.authProfileId];
   if (!credential) {
     return undefined;

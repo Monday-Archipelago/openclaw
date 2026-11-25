@@ -169,6 +169,11 @@ export function createScopedOAuthDelegation(
   return scope;
 }
 
+/** Retire capabilities when their lexical runtime scope ends. */
+export function closeScopedOAuthDelegation(scope: ScopedOAuthDelegation): void {
+  scopes.delete(scope);
+}
+
 function readScope(scope: ScopedOAuthDelegation): ReadonlyMap<string, Candidate> {
   const entries = scopes.get(scope);
   if (!entries) {

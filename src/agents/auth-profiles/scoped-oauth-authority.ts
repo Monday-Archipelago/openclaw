@@ -75,6 +75,19 @@ export function captureScopedOAuthAuthorityAssertion(
   };
 }
 
+/** Capture the physical Gateway before any asynchronous shared-row preparation. */
+export function captureScopedOAuthPhysicalOwnerId(env: NodeJS.ProcessEnv): string | undefined {
+  try {
+    const path = resolveGatewayStateOwnerPath(resolveOpenClawStateSqlitePath(env));
+    const owner = parseGatewayLockPayload(fs.readFileSync(path, "utf8"));
+    return owner?.role === "gateway" && owner.startTime != null && owner.processNamespace
+      ? owner.ownerId
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Fresh shared-state read: no writer, refresh path or retained native connection.
  * Require both the live listening lease and its matching physical Gateway lock.
  * An unavailable or unverifiable owner is never treated as current.
@@ -82,6 +95,7 @@ export function captureScopedOAuthAuthorityAssertion(
 export function readScopedOAuthAuthority(
   env: NodeJS.ProcessEnv,
   profileId: string,
+  expectedPhysicalOwnerId?: string,
 ): ScopedOAuthAuthorityObservation | undefined {
   const databasePath = resolveOpenClawStateSqlitePath(env);
   const ownerPath = resolveGatewayStateOwnerPath(databasePath);
@@ -89,6 +103,7 @@ export function readScopedOAuthAuthority(
   const physical = parseGatewayLockPayload(before);
   if (
     !physical?.ownerId ||
+    (expectedPhysicalOwnerId !== undefined && physical.ownerId !== expectedPhysicalOwnerId) ||
     physical.role !== "gateway" ||
     physical.startTime == null ||
     !physical.processNamespace

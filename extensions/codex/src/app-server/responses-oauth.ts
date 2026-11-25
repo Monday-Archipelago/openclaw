@@ -1,3 +1,4 @@
+import { captureScopedOAuthAccessForProfile, resolveScopedOAuthAccessForProfile, ScopedOAuthDelegationError } from "openclaw/plugin-sdk/agent-runtime";
 import { createHash } from "node:crypto";
 import {
   findPersistedAuthProfileCredentialAsync,
@@ -50,7 +51,8 @@ function fingerprintCodexResponsesOAuth(credential: AuthProfileCredential | unde
 }
 
 export type CodexResponsesOAuth = {
-  resolve: (forceRefresh: boolean) => Promise<{ token: string; assertCurrent: () => void }>;
+  resolve: (forceRefresh: boolean) => Promise<{ token: string; accountId?: string; assertCurrent: () => void }>;
+  nonRefreshable?: true;
 };
 
 export async function resolveCodexResponsesOAuthProfileFingerprint(params: {
@@ -59,6 +61,13 @@ export async function resolveCodexResponsesOAuthProfileFingerprint(params: {
   agentDir?: string;
   config?: Parameters<typeof resolveApiKeyForProfile>[0]["cfg"];
 }): Promise<string> {
+  const projection = resolveScopedOAuthAccessForProfile(params.profileId);
+  if (projection) {
+    if (projection.provider !== "openai" || projection.authFlow !== "chatgpt-token-sharing") {
+      throw new ScopedOAuthDelegationError("unusable");
+    }
+    return projection.authFingerprint;
+  }
   const credential = params.store.profiles[params.profileId];
   if (credential?.type === "oauth" && isPendingOAuthRefreshFence(credential)) {
     // A cold client can observe an in-progress durable refresh. Its selected
@@ -88,9 +97,30 @@ export async function createCodexResponsesOAuth(params: {
   profileId: string;
   store: AuthProfileStore;
   fingerprint: string;
+  scopedOAuthDelegation?: true;
   agentDir?: string;
   config?: Parameters<typeof resolveApiKeyForProfile>[0]["cfg"];
 }): Promise<CodexResponsesOAuth> {
+  const readProjection = captureScopedOAuthAccessForProfile(params.profileId);
+  if (params.scopedOAuthDelegation || readProjection) {
+    if (!readProjection) { throw new ScopedOAuthDelegationError("key-domain-mismatch"); }
+    const read = (forceRefresh = false) => {
+      const projection = readProjection(forceRefresh);
+      if (projection.provider !== "openai" || projection.authFlow !== "chatgpt-token-sharing" ||
+          projection.authFingerprint !== params.fingerprint) {
+        throw new ScopedOAuthDelegationError("key-domain-mismatch");
+      }
+      return projection;
+    };
+    read();
+    return {
+      nonRefreshable: true,
+      async resolve(forceRefresh) {
+        const projection = read(forceRefresh);
+        return { token: projection.access, accountId: projection.accountId, assertCurrent: () => { read(); } };
+      },
+    };
+  }
   const persisted =
     Boolean(await findPersistedAuthProfileCredentialAsync(params)) ||
     params.store.runtimePersistedProfileIds?.includes(params.profileId) === true;

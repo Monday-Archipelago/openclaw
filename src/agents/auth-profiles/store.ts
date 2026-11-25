@@ -1,3 +1,4 @@
+import { closeScopedOAuthDelegation } from "./scoped-oauth-delegation.js";
 /**
  * Auth profile store orchestration.
  * Merges persisted stores, runtime snapshots, inherited main-agent OAuth
@@ -159,11 +160,17 @@ export async function withAuthProfileStoreAgentDir<T>(
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const resolvedAgentDir = resolveUserPath(agentDir, env);
   const { sharedStore, oauthDelegation, assertCurrent } = await prepareScopedSharedAuthProfileStore(env);
-  assertCurrent();
-  return await authProfileRuntimeMode.run(
-    { kind: "agent-dir", agentDir: resolvedAgentDir, sharedStore, oauthDelegation, env },
-    run,
-  );
+  try {
+    assertCurrent();
+    return await authProfileRuntimeMode.run(
+      { kind: "agent-dir", agentDir: resolvedAgentDir, sharedStore, oauthDelegation, env },
+      run,
+    );
+  } finally {
+    if (oauthDelegation) {
+      closeScopedOAuthDelegation(oauthDelegation);
+    }
+  }
 }
 
 export function getScopedAuthProfileEnv(): NodeJS.ProcessEnv | undefined {

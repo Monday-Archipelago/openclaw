@@ -31,10 +31,16 @@ export function getScopedOAuthCandidate(profileId: string | undefined) {
 }
 
 /** Resolve only a marked candidate, before any persisted credential or fallback path. */
-export function resolveScopedOAuthAccessForProfile(profileId: string, forceRefresh = false) {
+export function captureScopedOAuthAccessForProfile(profileId: string) {
   const candidate = getScopedOAuthCandidate(profileId);
   const scope = getScopedOAuthDelegation();
-  return scope && candidate ? resolveScopedOAuthAccess(scope, { ...candidate, forceRefresh }) : undefined;
+  return scope && candidate
+    ? (forceRefresh = false) => resolveScopedOAuthAccess(scope, { ...candidate, forceRefresh })
+    : undefined;
+}
+
+export function resolveScopedOAuthAccessForProfile(profileId: string, forceRefresh = false) {
+  return captureScopedOAuthAccessForProfile(profileId)?.(forceRefresh);
 }
 
 type WorkerAuthProfileWrites = {

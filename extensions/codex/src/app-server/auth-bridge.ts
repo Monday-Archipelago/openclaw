@@ -1,3 +1,4 @@
+import { getScopedOAuthCandidate, resolveScopedOAuthAccessForProfile, ScopedOAuthDelegationError } from "openclaw/plugin-sdk/agent-runtime";
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
@@ -199,10 +200,31 @@ async function resolveCodexAppServerAuthProfile(params: CodexAppServerAuthProfil
   return { agentDir, store, profileId, credential };
 }
 
+function resolveScopedCodexProjection(profileId: string | undefined) {
+  if (!profileId || !getScopedOAuthCandidate(profileId)) {
+    return undefined;
+  }
+  const projection = resolveScopedOAuthAccessForProfile(profileId);
+  if (!projection || projection.provider !== "openai" || projection.authFlow !== "chatgpt-token-sharing") {
+    throw new ScopedOAuthDelegationError("unusable");
+  }
+  return projection;
+}
+
 /** Resolves prepared profile login material once so cache identity and RPC login cannot drift. */
 export async function resolveCodexAppServerPreparedAuthProfileSnapshot(
   params: CodexAppServerAuthProfileLookup,
 ): Promise<CodexAppServerPreparedAuthProfileSnapshot | undefined> {
+  const delegated = resolveScopedCodexProjection(params.authProfileId);
+  if (delegated) {
+    return {
+      inferenceAuth: "host-oauth",
+      scopedOAuthDelegation: true,
+      loginParams: { type: "apiKey", apiKey: `openclaw-local-${randomUUID()}` },
+      secretFreeCacheKey: delegated.authFingerprint,
+      ...(delegated.accountId ? { chatgptAccountId: delegated.accountId } : {}),
+    };
+  }
   const profile = await resolveCodexAppServerAuthProfile(params);
   if (!profile) {
     return undefined;
@@ -280,8 +302,10 @@ export async function resolveCodexAppServerPreparedAuthHandoff(params: {
   const selectedCredential = params.authProfileId
     ? params.authProfileStore.profiles[params.authProfileId]
     : undefined;
-  if (isCodexResponsesOAuthCredential(selectedCredential)) {
+  const delegated = resolveScopedCodexProjection(params.authProfileId);
+  if (delegated || isCodexResponsesOAuthCredential(selectedCredential)) {
     if (usesNativeHome || params.requirePreparedAuth || params.authRequirement !== "api-key") {
+      if (delegated) { throw new ScopedOAuthDelegationError("unusable"); }
       throw new Error(
         "ChatGPT subscription sharing requires the managed local Codex API route and an isolated home.",
       );
@@ -369,6 +393,8 @@ export async function resolveCodexAppServerPreparedAuthHandoff(params: {
 export async function resolveCodexAppServerAuthAccountCacheKey(
   params: CodexAppServerAuthProfileLookup,
 ): Promise<string | undefined> {
+  const delegated = resolveScopedCodexProjection(params.authProfileId);
+  if (delegated) { return delegated.authFingerprint; }
   const profile = await resolveCodexAppServerAuthProfile(params);
   if (!profile) {
     return undefined;
@@ -758,6 +784,10 @@ export async function refreshCodexAppServerAuthTokens(
     previousAccountId?: string | null;
   },
 ): Promise<CodexChatgptAuthTokensRefreshResponse> {
+  if (params.authProfileId && getScopedOAuthCandidate(params.authProfileId)) {
+    resolveScopedOAuthAccessForProfile(params.authProfileId, true);
+    throw new ScopedOAuthDelegationError("force-refresh");
+  }
   const previousAccountId = params.previousAccountId?.trim();
   const handoffAccountId = params.authHandoff?.chatgptAccountId.trim();
   if (previousAccountId && handoffAccountId && previousAccountId !== handoffAccountId) {
@@ -811,6 +841,11 @@ async function resolveCodexAppServerAuthProfileLoginParamsInternal(
   const profileId = resolveCodexAppServerAuthProfileId({ ...params, store });
   if (!profileId) {
     return undefined;
+  }
+  if (getScopedOAuthCandidate(profileId)) {
+    resolveScopedOAuthAccessForProfile(profileId, params.forceOAuthRefresh);
+    // Delegated bearer is never a native login credential.
+    throw new ScopedOAuthDelegationError("unusable");
   }
   const credential = store.profiles[profileId];
   if (!credential) {

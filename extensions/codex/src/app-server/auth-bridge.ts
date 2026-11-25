@@ -1,4 +1,3 @@
-import { getScopedOAuthCandidate, resolveScopedOAuthAccessForProfile, ScopedOAuthDelegationError } from "openclaw/plugin-sdk/agent-runtime";
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
@@ -9,6 +8,11 @@ import {
   AgentHarnessPreflightError,
   resolveDefaultAgentDir,
 } from "openclaw/plugin-sdk/agent-harness-registration";
+import {
+  getScopedOAuthCandidate,
+  resolveScopedOAuthAccessForProfile,
+  ScopedOAuthDelegationError,
+} from "openclaw/plugin-sdk/agent-runtime";
 import {
   ensureAuthProfileStoreAsync,
   findPersistedAuthProfileCredentialAsync,
@@ -205,7 +209,11 @@ function resolveScopedCodexProjection(profileId: string | undefined) {
     return undefined;
   }
   const projection = resolveScopedOAuthAccessForProfile(profileId);
-  if (!projection || projection.provider !== "openai" || projection.authFlow !== "chatgpt-token-sharing") {
+  if (
+    !projection ||
+    projection.provider !== "openai" ||
+    projection.authFlow !== "chatgpt-token-sharing"
+  ) {
     throw new ScopedOAuthDelegationError("unusable");
   }
   return projection;
@@ -305,7 +313,9 @@ export async function resolveCodexAppServerPreparedAuthHandoff(params: {
   const delegated = resolveScopedCodexProjection(params.authProfileId);
   if (delegated || isCodexResponsesOAuthCredential(selectedCredential)) {
     if (usesNativeHome || params.requirePreparedAuth || params.authRequirement !== "api-key") {
-      if (delegated) { throw new ScopedOAuthDelegationError("unusable"); }
+      if (delegated) {
+        throw new ScopedOAuthDelegationError("unusable");
+      }
       throw new Error(
         "ChatGPT subscription sharing requires the managed local Codex API route and an isolated home.",
       );
@@ -394,7 +404,9 @@ export async function resolveCodexAppServerAuthAccountCacheKey(
   params: CodexAppServerAuthProfileLookup,
 ): Promise<string | undefined> {
   const delegated = resolveScopedCodexProjection(params.authProfileId);
-  if (delegated) { return delegated.authFingerprint; }
+  if (delegated) {
+    return delegated.authFingerprint;
+  }
   const profile = await resolveCodexAppServerAuthProfile(params);
   if (!profile) {
     return undefined;

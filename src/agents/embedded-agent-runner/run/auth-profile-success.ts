@@ -1,5 +1,3 @@
-import { getScopedOAuthCandidate, resolveScopedOAuthAccessForProfile } from "../../auth-profiles/runtime-scope.js";
-import { ScopedOAuthDelegationError } from "../../auth-profiles/scoped-oauth-delegation.js";
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { MODEL_APIS } from "../../../config/types.models.js";
@@ -13,6 +11,11 @@ import { isStringOption } from "../../../utils/string-readers.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { markAuthProfileSuccess } from "../../auth-profiles.js";
 import { recordRuntimeAuthMaterialization } from "../../auth-profiles/runtime-materializations.js";
+import {
+  getScopedOAuthCandidate,
+  resolveScopedOAuthAccessForProfile,
+} from "../../auth-profiles/runtime-scope.js";
+import { ScopedOAuthDelegationError } from "../../auth-profiles/scoped-oauth-delegation.js";
 import {
   fingerprintAuthProfileOwnerShape,
   fingerprintAwsSdkRuntimeOwner,
@@ -38,7 +41,11 @@ export function markEmbeddedRunAuthProfileSuccess(input: {
   runId: string;
   sessionId: string;
 }): void {
-  if (input.authProfileStateMode === "read-only" || !input.profileId || getScopedOAuthCandidate(input.profileId)) {
+  if (
+    input.authProfileStateMode === "read-only" ||
+    !input.profileId ||
+    getScopedOAuthCandidate(input.profileId)
+  ) {
     return;
   }
   const successProfileId = input.profileId;
@@ -99,27 +106,33 @@ export function reportEmbeddedRunSuccessfulAuthBinding(input: {
   onSuccessfulAuthBinding?: (binding: AgentExecutionAuthBinding) => void;
 }): void {
   const delegated = getScopedOAuthCandidate(input.profileId);
-  const projection = delegated && input.profileId ? resolveScopedOAuthAccessForProfile(input.profileId) : undefined;
+  const projection =
+    delegated && input.profileId ? resolveScopedOAuthAccessForProfile(input.profileId) : undefined;
   if (delegated && (!projection || projection.provider !== input.provider)) {
     throw new ScopedOAuthDelegationError("unusable");
   }
   if (projection) {
     const auth = input.apiKeyInfo;
-    const resolvedAccess = auth?.apiKey && looksLikeSecretSentinel(auth.apiKey)
-      ? resolveSecretSentinel(auth.apiKey)
-      : auth?.apiKey;
-    const matchesResolved = auth?.profileId === projection.profileId &&
-      auth.mode === "oauth" && auth.authFlow === projection.authFlow &&
+    const resolvedAccess =
+      auth?.apiKey && looksLikeSecretSentinel(auth.apiKey)
+        ? resolveSecretSentinel(auth.apiKey)
+        : auth?.apiKey;
+    const matchesResolved =
+      auth?.profileId === projection.profileId &&
+      auth.mode === "oauth" &&
+      auth.authFlow === projection.authFlow &&
       resolvedAccess === projection.access;
     const matchesHarness = input.attempt.authBindingFingerprint === projection.authFingerprint;
     if (input.pluginHarnessOwnsTransport ? !matchesHarness : !matchesResolved) {
       throw new ScopedOAuthDelegationError("key-domain-mismatch");
     }
   }
-  const credential = !delegated && input.profileId ? input.profileStore.profiles[input.profileId] : undefined;
+  const credential =
+    !delegated && input.profileId ? input.profileStore.profiles[input.profileId] : undefined;
   const pluginHarnessApiKeyInfo = resolvePluginHarnessApiKeyInfo(input);
-  const authFingerprint = projection?.authFingerprint ?? (
-    credential &&
+  const authFingerprint =
+    projection?.authFingerprint ??
+    (credential &&
     input.profileId &&
     credential.type !== "oauth" &&
     input.pluginHarnessOwnsAuthBootstrap
@@ -165,7 +178,9 @@ export function reportEmbeddedRunSuccessfulAuthBinding(input: {
       : input.pluginHarnessOwnsTransport
         ? ("plugin-harness" as const)
         : undefined;
-  const materializedRoute = delegated ? undefined : resolveHarnessAuthMaterialization(input, credential);
+  const materializedRoute = delegated
+    ? undefined
+    : resolveHarnessAuthMaterialization(input, credential);
   if (materializedRoute) {
     recordRuntimeAuthMaterialization({
       agentDir: input.agentDir,

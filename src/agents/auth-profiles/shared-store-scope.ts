@@ -1,8 +1,6 @@
-import { CLAUDE_CLI_PROFILE_ID } from "./constants.js";
-import { captureScopedOAuthAuthorityAssertion, captureScopedOAuthPhysicalOwnerId, fingerprintScopedOAuthGeneration, readScopedOAuthAuthority } from "./scoped-oauth-authority.js";
-import { createScopedOAuthDelegation, type ScopedOAuthDelegation } from "./scoped-oauth-delegation.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { captureAuthProfileCredentialAuthority } from "../../state/user-model-account-authority.js";
+import { CLAUDE_CLI_PROFILE_ID } from "./constants.js";
 import {
   resolveSharedAuthStoreOwnership,
   resolveSharedAuthStoreOwnershipAsync,
@@ -12,6 +10,16 @@ import {
   createEmptyAuthProfileStore,
   pruneAuthProfileStoreReferences,
 } from "./runtime-snapshot-owner.js";
+import {
+  captureScopedOAuthAuthorityAssertion,
+  captureScopedOAuthPhysicalOwnerId,
+  fingerprintScopedOAuthGeneration,
+  readScopedOAuthAuthority,
+} from "./scoped-oauth-authority.js";
+import {
+  createScopedOAuthDelegation,
+  type ScopedOAuthDelegation,
+} from "./scoped-oauth-delegation.js";
 import { loadPersistedAuthProfileStoreFromRows, readSharedAuthProfileRows } from "./sqlite-read.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 
@@ -29,7 +37,9 @@ export async function prepareScopedSharedAuthProfileStore(env: NodeJS.ProcessEnv
     context.admission.assertCurrent();
     context.maintenanceScope?.assertAdmission();
     if (resolveSharedAuthStoreOwnership(env).location !== ownership.location) {
-      throw new Error("Shared auth store ownership changed during scope preparation; retry the operation.");
+      throw new Error(
+        "Shared auth store ownership changed during scope preparation; retry the operation.",
+      );
     }
   };
   if (ownership.location === "state-db") {
@@ -42,20 +52,32 @@ export async function prepareScopedSharedAuthProfileStore(env: NodeJS.ProcessEnv
     const candidates = Object.entries(sharedStore.profiles).flatMap(([profileId, credential]) => {
       // Ordinary OAuth/native login flows retain their existing portability behavior.
       // Phase A targets the existing ChatGPT token-sharing bearer transport.
-      if (credential.type !== "oauth" || credential.provider !== "openai" ||
-          credential.authFlow !== "chatgpt-token-sharing") {
+      if (
+        credential.type !== "oauth" ||
+        credential.provider !== "openai" ||
+        credential.authFlow !== "chatgpt-token-sharing"
+      ) {
         return [];
       }
-      const supported = Boolean(physicalOwnerId) &&
-        profileId !== CLAUDE_CLI_PROFILE_ID && credential.copyToAgents !== false;
+      const supported =
+        Boolean(physicalOwnerId) &&
+        profileId !== CLAUDE_CLI_PROFILE_ID &&
+        credential.copyToAgents !== false;
       const read = () => {
         assertCurrent();
         return readScopedOAuthAuthority(env, profileId, physicalOwnerId);
       };
       const generation = fingerprintScopedOAuthGeneration(profileId, credential);
-      return [{ profileId, provider: credential.provider, credential,
-        assertCurrent: supported ? captureScopedOAuthAuthorityAssertion(generation, read) : () => "stale" as const,
-      }];
+      return [
+        {
+          profileId,
+          provider: credential.provider,
+          credential,
+          assertCurrent: supported
+            ? captureScopedOAuthAuthorityAssertion(generation, read)
+            : () => "stale" as const,
+        },
+      ];
     });
     if (candidates.length) {
       oauthDelegation = createScopedOAuthDelegation(candidates);

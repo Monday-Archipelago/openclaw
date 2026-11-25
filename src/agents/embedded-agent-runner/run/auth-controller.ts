@@ -1,5 +1,3 @@
-import { getScopedOAuthCandidate, resolveScopedOAuthAccessForProfile } from "../../auth-profiles/runtime-scope.js";
-import { ScopedOAuthDelegationError } from "../../auth-profiles/scoped-oauth-delegation.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { Model } from "../../../llm/types.js";
@@ -15,6 +13,11 @@ import {
   resolveSubscriptionAuthModeForProfiles,
 } from "../../auth-profiles.js";
 import { OAuthRefreshFailureError } from "../../auth-profiles/oauth-refresh-failure.js";
+import {
+  getScopedOAuthCandidate,
+  resolveScopedOAuthAccessForProfile,
+} from "../../auth-profiles/runtime-scope.js";
+import { ScopedOAuthDelegationError } from "../../auth-profiles/scoped-oauth-delegation.js";
 import { classifyFailoverReason } from "../../embedded-agent-helpers.js";
 import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
 import { shouldUseTransientCooldownProbeSlot } from "../../failover-policy.js";
@@ -651,7 +654,11 @@ export function createEmbeddedRunAuthController(params: {
         params.attemptedThinking.clear();
         return true;
       } catch (err) {
-        if (authSignal.aborted || err instanceof ScopedOAuthDelegationError || err instanceof SecretSurfaceUnavailableError) {
+        if (
+          authSignal.aborted ||
+          err instanceof ScopedOAuthDelegationError ||
+          err instanceof SecretSurfaceUnavailableError
+        ) {
           throw err;
         }
         await recordOAuthRefreshFailure(candidate, err);

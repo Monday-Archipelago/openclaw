@@ -132,7 +132,9 @@ export function readScopedOAuthAuthority(
       const credential = coercePersistedAuthProfileStore(cell.raw)?.profiles[profileId];
       return {
         owner: JSON.stringify([physical.ownerId, lease.owner, lease.pid, lease.startedAt]),
-        generation: credential ? fingerprintScopedOAuthGeneration(profileId, credential) : undefined,
+        generation: credential
+          ? fingerprintScopedOAuthGeneration(profileId, credential)
+          : undefined,
         fenced: credential?.type === "oauth" && isOAuthRefreshFence(credential),
       };
     },

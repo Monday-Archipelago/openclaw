@@ -282,7 +282,9 @@ export async function createCodexInferenceProxy(params: {
               delete headers[key];
             }
             headers.authorization = `Bearer ${auth.token}`;
-            if (auth.accountId) { headers["chatgpt-account-id"] = auth.accountId; }
+            if (auth.accountId) {
+              headers["chatgpt-account-id"] = auth.accountId;
+            }
             // Required by the OSS preview; remove when OpenAI retires this header.
             headers["x-openai-chatpass-test"] = "codex-direct";
           }

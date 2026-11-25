@@ -1,5 +1,3 @@
-import { getScopedOAuthCandidate, resolveScopedOAuthAccessForProfile } from "../../auth-profiles/runtime-scope.js";
-import { ScopedOAuthDelegationError } from "../../auth-profiles/scoped-oauth-delegation.js";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { sleepWithAbort } from "../../../infra/backoff.js";
 import { emitDiagnosticsTimelineEvent } from "../../../infra/diagnostics-timeline.js";
@@ -9,6 +7,11 @@ import {
   markInlineProviderApiKeyFailure,
 } from "../../auth-profiles.js";
 import { revokeRuntimeAuthMaterializations } from "../../auth-profiles/runtime-materializations.js";
+import {
+  getScopedOAuthCandidate,
+  resolveScopedOAuthAccessForProfile,
+} from "../../auth-profiles/runtime-scope.js";
+import { ScopedOAuthDelegationError } from "../../auth-profiles/scoped-oauth-delegation.js";
 import {
   FailoverError,
   resolveFailoverReasonFromError,
@@ -244,12 +247,17 @@ export function createEmbeddedRunFailoverRetryController(input: {
     },
     advanceAuthProfile: (reason: FailoverReason | null, context: RateLimitAuthProfileContext) => {
       const profileId = preparedRuntime.snapshot().lastProfileId;
-      if (profileId && getScopedOAuthCandidate(profileId) &&
-          (reason === "auth" || reason === "auth_permanent")) {
+      if (
+        profileId &&
+        getScopedOAuthCandidate(profileId) &&
+        (reason === "auth" || reason === "auth_permanent")
+      ) {
         resolveScopedOAuthAccessForProfile(profileId, true);
         throw new ScopedOAuthDelegationError("force-refresh");
       }
-      return reason === "rate_limit" ? advanceRateLimitAuthProfile(context) : advanceAttemptAuthProfile();
+      return reason === "rate_limit"
+        ? advanceRateLimitAuthProfile(context)
+        : advanceAttemptAuthProfile();
     },
     maybeMarkAuthProfileFailure,
     resolveAuthProfileFailureReason: resolveProfileFailureReason,

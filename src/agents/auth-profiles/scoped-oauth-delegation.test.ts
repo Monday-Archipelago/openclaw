@@ -65,7 +65,13 @@ describe("scoped OAuth delegation", () => {
       authFlow: row.authFlow,
       accountId: row.accountId,
     });
-    for (const field of ["refresh", "idToken", "authorizationCode", "readCurrentCredential", "type"]) {
+    for (const field of [
+      "refresh",
+      "idToken",
+      "authorizationCode",
+      "readCurrentCredential",
+      "type",
+    ]) {
       expect(field in projection).toBe(false);
     }
     expect(Object.isFrozen(projection)).toBe(true);
@@ -94,11 +100,17 @@ describe("scoped OAuth delegation", () => {
     }
     const scope = scopeFor(credential());
     expect(hasScopedOAuthCandidate(scope, "ordinary-static")).toBe(false);
-    expectDenial(() => resolveScopedOAuthAccess(scope, { ...selection, provider: "other" }), "missing");
+    expectDenial(
+      () => resolveScopedOAuthAccess(scope, { ...selection, provider: "other" }),
+      "missing",
+    );
   });
 
   it("rejects both pending and failed durable refresh fences", () => {
-    const pending = createOAuthRefreshFence({ profileId: selection.profileId, credential: credential() });
+    const pending = createOAuthRefreshFence({
+      profileId: selection.profileId,
+      credential: credential(),
+    });
     for (const row of [pending, createFailedOAuthRefreshFence(pending)]) {
       const scope = scopeFor(row);
       expect(hasScopedOAuthCandidate(scope, selection.profileId)).toBe(true);
@@ -117,7 +129,10 @@ describe("scoped OAuth delegation", () => {
       status = denial;
       expectDenial(() => resolveScopedOAuthAccess(scope, selection), denial);
       expectDenial(() => resolveScopedOAuthBindingProof(scope, selection), denial);
-      expectDenial(() => resolveScopedOAuthAccess(scope, { ...selection, forceRefresh: true }), denial);
+      expectDenial(
+        () => resolveScopedOAuthAccess(scope, { ...selection, forceRefresh: true }),
+        denial,
+      );
       expect(assertCurrent).toHaveBeenCalledTimes(5);
     },
   );
@@ -126,7 +141,10 @@ describe("scoped OAuth delegation", () => {
     const assertion = vi.fn(() => "current" as const);
     const scope = scopeFor(credential(), assertion);
     resolveScopedOAuthAccess(scope, selection);
-    expectDenial(() => resolveScopedOAuthAccess(scope, { ...selection, forceRefresh: true }), "force-refresh");
+    expectDenial(
+      () => resolveScopedOAuthAccess(scope, { ...selection, forceRefresh: true }),
+      "force-refresh",
+    );
     expect(assertion).toHaveBeenCalledTimes(3);
     vi.mocked(Date.now).mockReturnValue(now + 1);
     expectDenial(() => resolveScopedOAuthAccess(scope, selection), "expired");
@@ -145,7 +163,10 @@ describe("scoped OAuth delegation", () => {
       expect((error as Error).cause).toBeUndefined();
     }
     const foreign = JSON.parse(JSON.stringify(scopeFor(credential()))) as ScopedOAuthDelegation;
-    expectDenial(() => hasScopedOAuthCandidate(foreign, selection.profileId), "key-domain-mismatch");
+    expectDenial(
+      () => hasScopedOAuthCandidate(foreign, selection.profileId),
+      "key-domain-mismatch",
+    );
   });
 
   it("retires captured capabilities on scope exit", () => {
@@ -160,7 +181,11 @@ describe("scoped OAuth delegation", () => {
     const rejected = scopeFor(credential(), () => status);
     status = "current";
     expectDenial(() => resolveScopedOAuthAccess(rejected, selection), "stale");
-    const candidate = { ...selection, credential: credential(), assertCurrent: () => "current" as const };
+    const candidate = {
+      ...selection,
+      credential: credential(),
+      assertCurrent: () => "current" as const,
+    };
     const duplicate = createScopedOAuthDelegation([candidate, candidate]);
     expectDenial(() => resolveScopedOAuthAccess(duplicate, selection), "unusable");
   });

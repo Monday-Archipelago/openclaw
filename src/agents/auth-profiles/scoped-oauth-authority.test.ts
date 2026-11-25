@@ -31,8 +31,11 @@ describe("scoped OAuth authority", () => {
     [undefined, "stale"],
   ] as const)("permanently retires an observed changed authority", (changed, denial) => {
     const initial = { owner: "owner", generation: "generation", fenced: false };
-    let observation: Parameters<typeof captureScopedOAuthAuthorityAssertion>[1] extends
-      () => infer T ? T : never = initial;
+    let observation: Parameters<
+      typeof captureScopedOAuthAuthorityAssertion
+    >[1] extends () => infer T
+      ? T
+      : never = initial;
     const read = vi.fn(() => observation);
     const assertCurrent = captureScopedOAuthAuthorityAssertion("generation", read);
     expect(assertCurrent()).toBe("current");
@@ -47,9 +50,7 @@ describe("scoped OAuth authority", () => {
     const read = vi.fn(() => ({ owner: "owner", generation: "other", fenced: false }));
     const stale = captureScopedOAuthAuthorityAssertion("generation", read);
     expect(stale()).toBe("stale");
-    expect(
-      captureScopedOAuthAuthorityAssertion("generation", () => undefined)(),
-    ).toBe("stale");
+    expect(captureScopedOAuthAuthorityAssertion("generation", () => undefined)()).toBe("stale");
     expect(
       captureScopedOAuthAuthorityAssertion("generation", () => ({
         owner: "owner",

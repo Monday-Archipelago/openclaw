@@ -1,4 +1,3 @@
-import { getScopedOAuthCandidate, getScopedOAuthCandidates } from "./runtime-scope.js";
 /**
  * Auth profile ordering and eligibility.
  * Resolves configured/stored auth order, provider aliases, cooldowns, and
@@ -21,6 +20,7 @@ import {
 import { resolveExplicitAuthOrderSelection } from "./explicit-order.js";
 import { isPendingOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import { dedupeProfileIds } from "./profile-list.js";
+import { getScopedOAuthCandidate, getScopedOAuthCandidates } from "./runtime-scope.js";
 import { isSetupCredentialAccessible } from "./setup-access.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 import {
@@ -107,7 +107,10 @@ export function resolveAuthProfileEligibility(params: {
   const delegated = getScopedOAuthCandidate(params.profileId);
   if (delegated) {
     const configured = params.cfg?.auth?.profiles?.[params.profileId];
-    if (!matchesStoredProvider(delegated.provider) || (configured && !matchesStoredProvider(configured.provider))) {
+    if (
+      !matchesStoredProvider(delegated.provider) ||
+      (configured && !matchesStoredProvider(configured.provider))
+    ) {
       return { eligible: false, reasonCode: "provider_mismatch" };
     }
     if (configured && configured.mode !== "oauth" && configured.mode !== "token") {
@@ -226,7 +229,9 @@ export function resolveAuthProfileOrderWithMetadata(
   const explicitProfiles = compatibleProfileIds(cfg?.auth?.profiles ?? {});
   const storeProfiles = dedupeProfileIds([
     ...compatibleProfileIds(store.profiles),
-    ...getScopedOAuthCandidates().filter((candidate) => matchesStoredProvider(candidate.provider)).map((candidate) => candidate.profileId),
+    ...getScopedOAuthCandidates()
+      .filter((candidate) => matchesStoredProvider(candidate.provider))
+      .map((candidate) => candidate.profileId),
   ]);
   const baseOrder =
     explicitOrder ?? (explicitProfiles.length > 0 ? explicitProfiles : storeProfiles);
@@ -255,7 +260,9 @@ export function resolveAuthProfileOrderWithMetadata(
   // Repair stored-order and config-profile drift from older setup flows:
   // bare config auth.order is a hard constraint, but configured profile ids
   // can drift from their stored credential ids and still need repair.
-  const allBaseProfilesMissing = baseOrder.every((profileId) => !store.profiles[profileId] && !getScopedOAuthCandidate(profileId));
+  const allBaseProfilesMissing = baseOrder.every(
+    (profileId) => !store.profiles[profileId] && !getScopedOAuthCandidate(profileId),
+  );
   if (
     filtered.length === 0 &&
     allBaseProfilesMissing &&

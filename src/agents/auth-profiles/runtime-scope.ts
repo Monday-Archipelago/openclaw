@@ -1,4 +1,3 @@
-import { listScopedOAuthCandidates, resolveScopedOAuthAccess, type ScopedOAuthDelegation } from "./scoped-oauth-delegation.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { isMainThread } from "node:worker_threads";
@@ -8,11 +7,22 @@ import { resolveDatabasePathKey } from "../../infra/sqlite-worker-identity.js";
 import type { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import {
+  listScopedOAuthCandidates,
+  resolveScopedOAuthAccess,
+  type ScopedOAuthDelegation,
+} from "./scoped-oauth-delegation.js";
 import type { AuthProfileStore } from "./types.js";
 
 type AuthProfileRuntimeMode =
   | { kind: "env-only" }
-  | { kind: "agent-dir"; agentDir: string; sharedStore?: AuthProfileStore; env: NodeJS.ProcessEnv; oauthDelegation?: ScopedOAuthDelegation };
+  | {
+      kind: "agent-dir";
+      agentDir: string;
+      sharedStore?: AuthProfileStore;
+      env: NodeJS.ProcessEnv;
+      oauthDelegation?: ScopedOAuthDelegation;
+    };
 
 export const authProfileRuntimeMode = new AsyncLocalStorage<AuthProfileRuntimeMode>();
 
@@ -27,7 +37,9 @@ export function getScopedOAuthCandidates() {
 }
 
 export function getScopedOAuthCandidate(profileId: string | undefined) {
-  return profileId ? getScopedOAuthCandidates().find((entry) => entry.profileId === profileId) : undefined;
+  return profileId
+    ? getScopedOAuthCandidates().find((entry) => entry.profileId === profileId)
+    : undefined;
 }
 
 /** Resolve only a marked candidate, before any persisted credential or fallback path. */

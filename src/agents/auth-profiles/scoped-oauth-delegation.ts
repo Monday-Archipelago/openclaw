@@ -1,5 +1,5 @@
-import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import { fingerprintAuthProfileCredential } from "../execution-auth-binding.js";
+import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import { resolveTokenExpiryState } from "./credential-state.js";
 import { isOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import type { OAuthCredential } from "./types.js";
@@ -188,7 +188,9 @@ export function hasScopedOAuthCandidate(scope: ScopedOAuthDelegation, profileId:
 }
 
 /** Non-secret selection metadata, including rejected candidates. */
-export function listScopedOAuthCandidates(scope: ScopedOAuthDelegation): ScopedOAuthCandidateMetadata[] {
+export function listScopedOAuthCandidates(
+  scope: ScopedOAuthDelegation,
+): ScopedOAuthCandidateMetadata[] {
   return [...readScope(scope)].map(([profileId, { provider, authFlow }]) => ({
     profileId,
     provider,

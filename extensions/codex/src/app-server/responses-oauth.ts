@@ -1,5 +1,9 @@
-import { captureScopedOAuthAccessForProfile, resolveScopedOAuthAccessForProfile, ScopedOAuthDelegationError } from "openclaw/plugin-sdk/agent-runtime";
 import { createHash } from "node:crypto";
+import {
+  captureScopedOAuthAccessForProfile,
+  resolveScopedOAuthAccessForProfile,
+  ScopedOAuthDelegationError,
+} from "openclaw/plugin-sdk/agent-runtime";
 import {
   findPersistedAuthProfileCredentialAsync,
   isPendingOAuthRefreshFence,
@@ -51,7 +55,9 @@ function fingerprintCodexResponsesOAuth(credential: AuthProfileCredential | unde
 }
 
 export type CodexResponsesOAuth = {
-  resolve: (forceRefresh: boolean) => Promise<{ token: string; accountId?: string; assertCurrent: () => void }>;
+  resolve: (
+    forceRefresh: boolean,
+  ) => Promise<{ token: string; accountId?: string; assertCurrent: () => void }>;
   nonRefreshable?: true;
 };
 
@@ -103,11 +109,16 @@ export async function createCodexResponsesOAuth(params: {
 }): Promise<CodexResponsesOAuth> {
   const readProjection = captureScopedOAuthAccessForProfile(params.profileId);
   if (params.scopedOAuthDelegation || readProjection) {
-    if (!readProjection) { throw new ScopedOAuthDelegationError("key-domain-mismatch"); }
+    if (!readProjection) {
+      throw new ScopedOAuthDelegationError("key-domain-mismatch");
+    }
     const read = (forceRefresh = false) => {
       const projection = readProjection(forceRefresh);
-      if (projection.provider !== "openai" || projection.authFlow !== "chatgpt-token-sharing" ||
-          projection.authFingerprint !== params.fingerprint) {
+      if (
+        projection.provider !== "openai" ||
+        projection.authFlow !== "chatgpt-token-sharing" ||
+        projection.authFingerprint !== params.fingerprint
+      ) {
         throw new ScopedOAuthDelegationError("key-domain-mismatch");
       }
       return projection;
@@ -117,7 +128,13 @@ export async function createCodexResponsesOAuth(params: {
       nonRefreshable: true,
       async resolve(forceRefresh) {
         const projection = read(forceRefresh);
-        return { token: projection.access, accountId: projection.accountId, assertCurrent: () => { read(); } };
+        return {
+          token: projection.access,
+          accountId: projection.accountId,
+          assertCurrent: () => {
+            read();
+          },
+        };
       },
     };
   }

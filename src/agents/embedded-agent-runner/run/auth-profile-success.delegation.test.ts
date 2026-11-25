@@ -20,11 +20,13 @@ describe("delegated successful-run binding", () => {
       authFlow: "chatgpt-token-sharing",
     };
     let current = true;
-    const scope = createScopedOAuthDelegation([{
-      ...selection,
-      credential,
-      assertCurrent: () => current ? "current" : "stale",
-    }]);
+    const scope = createScopedOAuthDelegation([
+      {
+        ...selection,
+        credential,
+        assertCurrent: () => (current ? "current" : "stale"),
+      },
+    ]);
     const proof = resolveScopedOAuthBindingProof(scope, selection);
     const onSuccessfulAuthBinding = vi.fn();
     const input: Parameters<typeof reportEmbeddedRunSuccessfulAuthBinding>[0] = {
@@ -46,28 +48,41 @@ describe("delegated successful-run binding", () => {
       onSuccessfulAuthBinding,
     };
     try {
-      authProfileRuntimeMode.run({
-        kind: "agent-dir", agentDir: "/synthetic", env: {}, oauthDelegation: scope,
-      }, () => {
-        reportEmbeddedRunSuccessfulAuthBinding(input);
-        expect(onSuccessfulAuthBinding).toHaveBeenCalledWith(expect.objectContaining({
-          authProfileId: selection.profileId,
-          authFingerprint: proof,
-        }));
-        expect(() => reportEmbeddedRunSuccessfulAuthBinding({
-          ...input, apiKeyInfo: { ...input.apiKeyInfo!, apiKey: "wrong" },
-        })).toThrow(expect.objectContaining({ reason: "key-domain-mismatch" }));
-        reportEmbeddedRunSuccessfulAuthBinding({
-          ...input, apiKeyInfo: null, pluginHarnessOwnsTransport: true,
-          attempt: { ...input.attempt, authBindingFingerprint: proof },
-        });
-        expect(onSuccessfulAuthBinding).toHaveBeenCalledTimes(2);
-        current = false;
-        expect(() => reportEmbeddedRunSuccessfulAuthBinding(input)).toThrow(
-          expect.objectContaining({ reason: "stale" }),
-        );
-        expect(onSuccessfulAuthBinding).toHaveBeenCalledTimes(2);
-      });
+      authProfileRuntimeMode.run(
+        {
+          kind: "agent-dir",
+          agentDir: "/synthetic",
+          env: {},
+          oauthDelegation: scope,
+        },
+        () => {
+          reportEmbeddedRunSuccessfulAuthBinding(input);
+          expect(onSuccessfulAuthBinding).toHaveBeenCalledWith(
+            expect.objectContaining({
+              authProfileId: selection.profileId,
+              authFingerprint: proof,
+            }),
+          );
+          expect(() =>
+            reportEmbeddedRunSuccessfulAuthBinding({
+              ...input,
+              apiKeyInfo: { ...input.apiKeyInfo!, apiKey: "wrong" },
+            }),
+          ).toThrow(expect.objectContaining({ reason: "key-domain-mismatch" }));
+          reportEmbeddedRunSuccessfulAuthBinding({
+            ...input,
+            apiKeyInfo: null,
+            pluginHarnessOwnsTransport: true,
+            attempt: { ...input.attempt, authBindingFingerprint: proof },
+          });
+          expect(onSuccessfulAuthBinding).toHaveBeenCalledTimes(2);
+          current = false;
+          expect(() => reportEmbeddedRunSuccessfulAuthBinding(input)).toThrow(
+            expect.objectContaining({ reason: "stale" }),
+          );
+          expect(onSuccessfulAuthBinding).toHaveBeenCalledTimes(2);
+        },
+      );
     } finally {
       closeScopedOAuthDelegation(scope);
     }

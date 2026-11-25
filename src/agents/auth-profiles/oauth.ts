@@ -1,5 +1,3 @@
-import { getScopedOAuthCandidate, resolveScopedOAuthAccessForProfile } from "./runtime-scope.js";
-import { ScopedOAuthDelegationError } from "./scoped-oauth-delegation.js";
 /**
  * Auth profile API-key/OAuth runtime resolver.
  * Converts selected auth profiles into provider API keys, refreshes OAuth
@@ -46,10 +44,12 @@ import { withPersonalAuthProfileStore, type PersonalAuthProfileStore } from "./p
 import { assertNoOAuthSecretRefPolicyViolations } from "./policy.js";
 import { clearLastGoodProfileWithLock } from "./profiles.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
+import { getScopedOAuthCandidate, resolveScopedOAuthAccessForProfile } from "./runtime-scope.js";
 import {
   getRuntimeAuthProfileStoreSnapshotCore,
   updateRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
+import { ScopedOAuthDelegationError } from "./scoped-oauth-delegation.js";
 import { getSetupCredentialRuntimeProfile, isSetupCredentialAccessible } from "./setup-access.js";
 import {
   loadAuthProfileStoreForRuntimeAsync,
@@ -99,7 +99,13 @@ function buildApiKeyProfileResult(
     provider: params.provider,
     email: params.email,
   };
-  for (const key of ["profileId", "profileType", "authFlow", "credential", "readCurrentCredential"] as const) {
+  for (const key of [
+    "profileId",
+    "profileType",
+    "authFlow",
+    "credential",
+    "readCurrentCredential",
+  ] as const) {
     Object.defineProperty(result, key, {
       value: key === "readCurrentCredential" ? (params[key] ?? null) : params[key],
       enumerable: false,
@@ -324,15 +330,25 @@ function resolveRuntimeAuthProfile(params: {
   };
 }
 
-function resolveDelegatedOAuthProfile(params: ResolveApiKeyForProfileParams): ResolveApiKeyForProfileResult | undefined {
+function resolveDelegatedOAuthProfile(
+  params: ResolveApiKeyForProfileParams,
+): ResolveApiKeyForProfileResult | undefined {
   const candidate = getScopedOAuthCandidate(params.profileId);
   if (!candidate) {
     return undefined;
   }
   const projection = resolveScopedOAuthAccessForProfile(params.profileId, params.forceRefresh);
-  if (!projection || params.profileId === CLAUDE_CLI_PROFILE_ID ||
-      params.validateOAuthCredential ||
-      !isProfileConfigCompatible({ cfg: params.cfg, profileId: params.profileId, provider: candidate.provider, mode: "oauth" })) {
+  if (
+    !projection ||
+    params.profileId === CLAUDE_CLI_PROFILE_ID ||
+    params.validateOAuthCredential ||
+    !isProfileConfigCompatible({
+      cfg: params.cfg,
+      profileId: params.profileId,
+      provider: candidate.provider,
+      mode: "oauth",
+    })
+  ) {
     throw new ScopedOAuthDelegationError("unusable");
   }
   return buildApiKeyProfileResult({

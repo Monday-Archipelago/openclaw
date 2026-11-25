@@ -1,5 +1,3 @@
-import { getScopedOAuthCandidate } from "./auth-profiles/runtime-scope.js";
-import { ScopedOAuthDelegationError } from "./auth-profiles/scoped-oauth-delegation.js";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -21,6 +19,8 @@ import {
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
+import { getScopedOAuthCandidate } from "./auth-profiles/runtime-scope.js";
+import { ScopedOAuthDelegationError } from "./auth-profiles/scoped-oauth-delegation.js";
 import * as cliCredentials from "./cli-credentials.js";
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
@@ -106,7 +106,7 @@ function resolveModelAuthModeFromStore(
   const profiles = listProfilesForProvider(authStore, resolved);
   const modes = new Set(
     profiles
-      .map((id) => getScopedOAuthCandidate(id) ? "oauth" : authStore.profiles[id]?.type)
+      .map((id) => (getScopedOAuthCandidate(id) ? "oauth" : authStore.profiles[id]?.type))
       .filter((mode) => mode === "oauth" || mode === "token" || mode === "api_key"),
   );
   if (modes.size >= 2) {
@@ -226,7 +226,8 @@ export async function hasAvailableAuthForProvider(params: {
         candidateType &&
         !allowsAuth(
           authConfig.profileTypeToAuthMode(candidateType),
-          delegated?.authFlow ?? (candidateCredential?.type === "oauth" ? candidateCredential.authFlow : undefined),
+          delegated?.authFlow ??
+            (candidateCredential?.type === "oauth" ? candidateCredential.authFlow : undefined),
         )
       ) {
         continue;
@@ -249,7 +250,9 @@ export async function hasAvailableAuthForProvider(params: {
         return true;
       }
     } catch (err) {
-      if (err instanceof ScopedOAuthDelegationError) { throw err; }
+      if (err instanceof ScopedOAuthDelegationError) {
+        throw err;
+      }
       log.debug?.(`auth profile "${candidate}" failed for provider "${provider}": ${String(err)}`);
     }
   }

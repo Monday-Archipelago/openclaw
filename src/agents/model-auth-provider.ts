@@ -1,5 +1,3 @@
-import { getScopedOAuthCandidate } from "./auth-profiles/runtime-scope.js";
-import { ScopedOAuthDelegationError } from "./auth-profiles/scoped-oauth-delegation.js";
 /**
  * Ordered credential resolution for one provider request.
  */
@@ -30,6 +28,8 @@ import { assertAuthProfileMigrationReady } from "./auth-profiles/legacy-source-d
 import { OAuthRefreshFailureError } from "./auth-profiles/oauth-refresh-failure.js";
 import { isStoredCredentialCompatibleWithAuthProvider } from "./auth-profiles/order.js";
 import { resolveAuthStorePathForDisplayAsync } from "./auth-profiles/paths.js";
+import { getScopedOAuthCandidate } from "./auth-profiles/runtime-scope.js";
+import { ScopedOAuthDelegationError } from "./auth-profiles/scoped-oauth-delegation.js";
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import { assertAuthModeAllowedForModel, isAuthModeAllowedForModel } from "./model-auth-policy.js";
 import * as authConfig from "./model-auth-provider-config.js";
@@ -266,7 +266,8 @@ export async function resolveApiKeyForProviderCore(input: {
       provider,
       store,
       mode: mode ? authConfig.profileTypeToAuthMode(mode) : "api-key",
-      authFlow: resolved.authFlow ?? (credential?.type === "oauth" ? credential.authFlow : undefined),
+      authFlow:
+        resolved.authFlow ?? (credential?.type === "oauth" ? credential.authFlow : undefined),
     });
   };
 
@@ -315,7 +316,8 @@ export async function resolveApiKeyForProviderCore(input: {
         profileId,
         mode: authConfig.profileTypeToAuthMode(configuredProfileType),
         authFlow:
-          delegated?.authFlow ?? (configuredCredential?.type === "oauth" ? configuredCredential.authFlow : undefined),
+          delegated?.authFlow ??
+          (configuredCredential?.type === "oauth" ? configuredCredential.authFlow : undefined),
       });
     }
     const resolved = await resolveApiKeyForProfile({
@@ -532,7 +534,8 @@ export async function resolveApiKeyForProviderCore(input: {
     const candidateCredential = delegated ? undefined : store.profiles[candidate];
     const candidateType = delegated ? "oauth" : candidateCredential?.type;
     const candidateAuthFlow =
-      delegated?.authFlow ?? (candidateCredential?.type === "oauth" ? candidateCredential.authFlow : undefined);
+      delegated?.authFlow ??
+      (candidateCredential?.type === "oauth" ? candidateCredential.authFlow : undefined);
     const candidateMode = candidateType
       ? authConfig.profileTypeToAuthMode(candidateType)
       : undefined;
@@ -582,7 +585,10 @@ export async function resolveApiKeyForProviderCore(input: {
       }
     } catch (err) {
       params.signal?.throwIfAborted();
-      if (err instanceof ScopedOAuthDelegationError || err instanceof SecretSurfaceUnavailableError) {
+      if (
+        err instanceof ScopedOAuthDelegationError ||
+        err instanceof SecretSurfaceUnavailableError
+      ) {
         throw err;
       }
       if (

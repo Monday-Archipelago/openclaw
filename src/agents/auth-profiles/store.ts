@@ -58,7 +58,11 @@ import {
   type AuthProfileReadOwner,
   type LoadAuthProfileStoreOptions,
 } from "./runtime-read.js";
-import { authProfileRuntimeMode, getWorkerAuthProfileWrites } from "./runtime-scope.js";
+import {
+  authProfileRuntimeMode,
+  getWorkerAuthProfileWrites,
+  reportScopedOAuthRuntimeDiagnostic,
+} from "./runtime-scope.js";
 import {
   captureRuntimeAuthProfileLegacyCandidates,
   pruneAuthProfileStoreReferences,
@@ -165,7 +169,10 @@ export async function withAuthProfileStoreAgentDir<T>(
     assertCurrent();
     return await authProfileRuntimeMode.run(
       { kind: "agent-dir", agentDir: resolvedAgentDir, sharedStore, oauthDelegation, env },
-      run,
+      () => {
+        reportScopedOAuthRuntimeDiagnostic("scope-entry");
+        return run();
+      },
     );
   } finally {
     if (oauthDelegation) {

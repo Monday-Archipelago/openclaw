@@ -20,7 +20,11 @@ import {
 import { resolveExplicitAuthOrderSelection } from "./explicit-order.js";
 import { isPendingOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import { dedupeProfileIds } from "./profile-list.js";
-import { getScopedOAuthCandidate, getScopedOAuthCandidates } from "./runtime-scope.js";
+import {
+  getScopedOAuthCandidate,
+  getScopedOAuthCandidates,
+  reportScopedOAuthRuntimeDiagnostic,
+} from "./runtime-scope.js";
 import { isSetupCredentialAccessible } from "./setup-access.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 import {
@@ -222,6 +226,7 @@ export function resolveAuthProfileOrderWithMetadata(
       providerKey,
       providerAuthKey,
     });
+  reportScopedOAuthRuntimeDiagnostic("order", { explicitOrder });
   const compatibleProfileIds = (profiles: Record<string, { provider: string }>) =>
     Object.entries(profiles)
       .filter(([, profile]) => matchesStoredProvider(profile.provider))

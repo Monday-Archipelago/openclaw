@@ -20,6 +20,11 @@ import {
   createScopedOAuthDelegation,
   type ScopedOAuthDelegation,
 } from "./scoped-oauth-delegation.js";
+import {
+  reportScopedOAuthDiagnostic,
+  scopedOAuthDiagnosticsEnabled,
+  summarizeScopedOAuthRows,
+} from "./scoped-oauth-diagnostic.js";
 import { loadPersistedAuthProfileStoreFromRows, readSharedAuthProfileRows } from "./sqlite-read.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 
@@ -82,6 +87,15 @@ export async function prepareScopedSharedAuthProfileStore(env: NodeJS.ProcessEnv
     if (candidates.length) {
       oauthDelegation = createScopedOAuthDelegation(candidates);
     }
+    if (scopedOAuthDiagnosticsEnabled()) {
+      reportScopedOAuthDiagnostic({
+        stage: "admission",
+        ownership: ownership.location,
+        rows: summarizeScopedOAuthRows(sharedStore.profiles),
+        physicalOwnerPresent: Boolean(physicalOwnerId),
+        candidateMarkers: candidates.length,
+      });
+    }
     // Temporary runs must not acquire a second OAuth refresh owner. This view
     // stays inside the operation scope and is never persisted into an agent store.
     sharedStore.profiles = Object.fromEntries(
@@ -91,6 +105,14 @@ export async function prepareScopedSharedAuthProfileStore(env: NodeJS.ProcessEnv
       ),
     );
     pruneAuthProfileStoreReferences(sharedStore, new Set(Object.keys(sharedStore.profiles)));
+  } else if (scopedOAuthDiagnosticsEnabled()) {
+    reportScopedOAuthDiagnostic({
+      stage: "admission",
+      ownership: ownership.location,
+      rows: null,
+      physicalOwnerPresent: null,
+      candidateMarkers: 0,
+    });
   }
   return {
     sharedStore,

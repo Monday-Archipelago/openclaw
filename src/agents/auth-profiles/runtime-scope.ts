@@ -12,6 +12,12 @@ import {
   resolveScopedOAuthAccess,
   type ScopedOAuthDelegation,
 } from "./scoped-oauth-delegation.js";
+import {
+  observeScopedOAuthRuntimeModule,
+  reportScopedOAuthDiagnostic,
+  scopedOAuthDiagnosticsEnabled,
+  type ScopedOAuthRuntimeDiagnosticStage,
+} from "./scoped-oauth-diagnostic.js";
 import type { AuthProfileStore } from "./types.js";
 
 type AuthProfileRuntimeMode =
@@ -25,6 +31,48 @@ type AuthProfileRuntimeMode =
     };
 
 export const authProfileRuntimeMode = new AsyncLocalStorage<AuthProfileRuntimeMode>();
+
+const diagnosticRuntimeModule = Symbol("scoped-oauth-runtime-module");
+
+/** Observe the host and packaged consumer without changing selection or scope ownership. */
+export function reportScopedOAuthRuntimeDiagnostic(
+  stage: ScopedOAuthRuntimeDiagnosticStage,
+  selection?: { explicitOrder?: readonly string[]; selectedProfile?: string },
+): void {
+  if (!scopedOAuthDiagnosticsEnabled()) {
+    return;
+  }
+  const mode = authProfileRuntimeMode.getStore();
+  const scope = mode?.kind === "agent-dir" ? mode.oauthDelegation : undefined;
+  let candidates: ReturnType<typeof listScopedOAuthCandidates> | undefined = scope ? undefined : [];
+  if (scope) {
+    try {
+      candidates = listScopedOAuthCandidates(scope);
+    } catch {
+      // A foreign/retired capability is a diagnostic fact, not a fallback authorization.
+    }
+  }
+  const explicitOrder = selection?.explicitOrder;
+  const selectedProfile = selection?.selectedProfile;
+  reportScopedOAuthDiagnostic({
+    stage,
+    mode: mode?.kind ?? "none",
+    scopePresent: Boolean(scope),
+    scopeReadable: scope ? candidates !== undefined : null,
+    candidateMarkers: candidates?.length ?? null,
+    explicitOrderPresent: stage === "order" ? explicitOrder !== undefined : null,
+    explicitOrderMatchesMarker:
+      explicitOrder && candidates
+        ? candidates.some((candidate) => explicitOrder.includes(candidate.profileId))
+        : null,
+    selectedProfilePresent: stage === "codex" ? Boolean(selectedProfile) : null,
+    selectedProfileMatchesMarker:
+      selectedProfile && candidates
+        ? candidates.some((candidate) => candidate.profileId === selectedProfile)
+        : null,
+    sameRuntimeModuleAsEntry: observeScopedOAuthRuntimeModule(stage, diagnosticRuntimeModule),
+  });
+}
 
 export function getScopedOAuthDelegation(): ScopedOAuthDelegation | undefined {
   const mode = authProfileRuntimeMode.getStore();

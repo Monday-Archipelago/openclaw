@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-registration";
 import {
   getScopedOAuthCandidate,
+  reportScopedOAuthRuntimeDiagnostic,
   resolveScopedOAuthAccessForProfile,
   ScopedOAuthDelegationError,
 } from "openclaw/plugin-sdk/agent-runtime";
@@ -205,6 +206,7 @@ async function resolveCodexAppServerAuthProfile(params: CodexAppServerAuthProfil
 }
 
 function resolveScopedCodexProjection(profileId: string | undefined) {
+  reportScopedOAuthRuntimeDiagnostic("codex", { selectedProfile: profileId });
   if (!profileId || !getScopedOAuthCandidate(profileId)) {
     return undefined;
   }

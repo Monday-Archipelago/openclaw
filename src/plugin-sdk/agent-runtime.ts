@@ -187,6 +187,7 @@ export { resolveThinkingDefault } from "../agents/model-thinking-default.js";
 export {
   captureScopedOAuthAccessForProfile,
   getScopedOAuthCandidate,
+  reportScopedOAuthRuntimeDiagnostic,
   resolveScopedOAuthAccessForProfile,
 } from "../agents/auth-profiles/runtime-scope.js";
 export { ScopedOAuthDelegationError } from "../agents/auth-profiles/scoped-oauth-delegation.js";

@@ -4,6 +4,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   getScopedOAuthCandidate,
+  reportScopedOAuthRuntimeDiagnostic,
   resolveScopedOAuthAccessForProfile,
   ScopedOAuthDelegationError,
 } from "openclaw/plugin-sdk/agent-runtime";
@@ -23,6 +24,7 @@ type CodexAppServerPreparedAuthBinding = {
 export async function prepareCodexAppServerAuthBinding(
   params: AgentHarnessAuthBindingFingerprintParams,
 ): Promise<CodexAppServerPreparedAuthBinding | undefined> {
+  reportScopedOAuthRuntimeDiagnostic("codex", { selectedProfile: params.authProfileId });
   if (getScopedOAuthCandidate(params.authProfileId)) {
     const projection = resolveScopedOAuthAccessForProfile(params.authProfileId);
     if (

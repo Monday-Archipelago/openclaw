@@ -2,6 +2,7 @@
 import { toErrorObject } from "../../infra/errors.js";
 import { SecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
 import { OAuthRefreshFailureError } from "../auth-profiles/oauth-refresh-failure.js";
+import { ScopedOAuthDelegationError } from "../auth-profiles/scoped-oauth-delegation.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { isProfileInCooldown } from "../auth-profiles/usage-state.js";
 import { resolveProviderModelAuthPolicy } from "../model-auth-policy.js";
@@ -123,6 +124,7 @@ export async function resolvePreparedRuntimeAuthAttempts<Model, Auth>(params: {
       return { model, plan: resolved.plan, auth: resolved.auth };
     } catch (error) {
       if (
+        error instanceof ScopedOAuthDelegationError ||
         error instanceof SecretSurfaceUnavailableError ||
         error instanceof OAuthRefreshFailureError
       ) {
@@ -319,7 +321,10 @@ export async function resolvePreparedRuntimeModelAuth(
         plan: applyResolvedAuthToPlan({ plan, auth, candidates: currentCandidates }),
       };
     } catch (error) {
-      if (error instanceof SecretSurfaceUnavailableError) {
+      if (
+        error instanceof ScopedOAuthDelegationError ||
+        error instanceof SecretSurfaceUnavailableError
+      ) {
         throw error;
       }
       if (!refreshFailure && error instanceof OAuthRefreshFailureError) {

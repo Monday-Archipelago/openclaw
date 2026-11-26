@@ -2,6 +2,12 @@ import {
   fingerprintResolvedAuthProfileCredential,
   type AgentHarnessAuthBindingFingerprintParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  getScopedOAuthCandidate,
+  reportScopedOAuthRuntimeDiagnostic,
+  resolveScopedOAuthAccessForProfile,
+  ScopedOAuthDelegationError,
+} from "openclaw/plugin-sdk/agent-runtime";
 import { resolveApiKeyForProfile, type AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveOpenAICodexAuthIdentity } from "openclaw/plugin-sdk/provider-auth";
 import {
@@ -18,6 +24,20 @@ type CodexAppServerPreparedAuthBinding = {
 export async function prepareCodexAppServerAuthBinding(
   params: AgentHarnessAuthBindingFingerprintParams,
 ): Promise<CodexAppServerPreparedAuthBinding | undefined> {
+  reportScopedOAuthRuntimeDiagnostic("codex", { selectedProfile: params.authProfileId });
+  if (getScopedOAuthCandidate(params.authProfileId)) {
+    const projection = resolveScopedOAuthAccessForProfile(params.authProfileId);
+    if (
+      !projection ||
+      projection.provider !== "openai" ||
+      projection.authFlow !== "chatgpt-token-sharing"
+    ) {
+      throw new ScopedOAuthDelegationError("unusable");
+    }
+    const store = structuredClone(params.authProfileStore);
+    delete store.profiles[params.authProfileId];
+    return { fingerprint: projection.authFingerprint, authProfileStore: store };
+  }
   const credential = params.authProfileStore.profiles[params.authProfileId];
   if (!credential) {
     return undefined;

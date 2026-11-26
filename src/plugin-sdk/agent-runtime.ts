@@ -182,3 +182,12 @@ export {
 } from "../agents/agent-scope-config.js";
 export { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
 export { resolveThinkingDefault } from "../agents/model-thinking-default.js";
+
+// Internal host-scoped delegation access for the managed Codex Responses bridge.
+export {
+  captureScopedOAuthAccessForProfile,
+  getScopedOAuthCandidate,
+  reportScopedOAuthRuntimeDiagnostic,
+  resolveScopedOAuthAccessForProfile,
+} from "../agents/auth-profiles/runtime-scope.js";
+export { ScopedOAuthDelegationError } from "../agents/auth-profiles/scoped-oauth-delegation.js";

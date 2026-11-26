@@ -58,7 +58,11 @@ import {
   type AuthProfileReadOwner,
   type LoadAuthProfileStoreOptions,
 } from "./runtime-read.js";
-import { authProfileRuntimeMode, getWorkerAuthProfileWrites } from "./runtime-scope.js";
+import {
+  authProfileRuntimeMode,
+  getWorkerAuthProfileWrites,
+  reportScopedOAuthRuntimeDiagnostic,
+} from "./runtime-scope.js";
 import {
   captureRuntimeAuthProfileLegacyCandidates,
   pruneAuthProfileStoreReferences,
@@ -95,6 +99,7 @@ import {
   updateRuntimeAuthProfileStoreSnapshot,
   type OwnedRuntimeAuthProfileStoreSnapshotEntry,
 } from "./runtime-snapshots.js";
+import { closeScopedOAuthDelegation } from "./scoped-oauth-delegation.js";
 import {
   prepareScopedSharedAuthProfileCredentialRead,
   prepareScopedSharedAuthProfileStore,
@@ -158,12 +163,22 @@ export async function withAuthProfileStoreAgentDir<T>(
   const env = { ...process.env, OPENCLAW_STATE_DIR: sharedStateDir };
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const resolvedAgentDir = resolveUserPath(agentDir, env);
-  const { sharedStore, assertCurrent } = await prepareScopedSharedAuthProfileStore(env);
-  assertCurrent();
-  return await authProfileRuntimeMode.run(
-    { kind: "agent-dir", agentDir: resolvedAgentDir, sharedStore, env },
-    run,
-  );
+  const { sharedStore, oauthDelegation, assertCurrent } =
+    await prepareScopedSharedAuthProfileStore(env);
+  try {
+    assertCurrent();
+    return await authProfileRuntimeMode.run(
+      { kind: "agent-dir", agentDir: resolvedAgentDir, sharedStore, oauthDelegation, env },
+      () => {
+        reportScopedOAuthRuntimeDiagnostic("scope-entry");
+        return run();
+      },
+    );
+  } finally {
+    if (oauthDelegation) {
+      closeScopedOAuthDelegation(oauthDelegation);
+    }
+  }
 }
 
 export function getScopedAuthProfileEnv(): NodeJS.ProcessEnv | undefined {

@@ -809,6 +809,7 @@ async function startInitializedCodexAppServerClientOnce(
                   profileId: prepared.profileId,
                   store: prepared.store,
                   fingerprint: prepared.snapshot.secretFreeCacheKey,
+                  scopedOAuthDelegation: prepared.snapshot.scopedOAuthDelegation,
                   agentDir: params.agentDir,
                   config: params.config,
                 }),

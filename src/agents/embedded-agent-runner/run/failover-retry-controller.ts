@@ -8,6 +8,11 @@ import {
 } from "../../auth-profiles.js";
 import { revokeRuntimeAuthMaterializations } from "../../auth-profiles/runtime-materializations.js";
 import {
+  getScopedOAuthCandidate,
+  resolveScopedOAuthAccessForProfile,
+} from "../../auth-profiles/runtime-scope.js";
+import { ScopedOAuthDelegationError } from "../../auth-profiles/scoped-oauth-delegation.js";
+import {
   FailoverError,
   resolveFailoverReasonFromError,
   resolveFailoverStatus,
@@ -132,6 +137,9 @@ export function createEmbeddedRunFailoverRetryController(input: {
     retryAfterMs?: number;
   }) => {
     const { profileId, reason } = failure;
+    if (getScopedOAuthCandidate(profileId)) {
+      return;
+    }
     if (
       preparedRuntime.snapshot().pluginHarnessOwnsTransport &&
       (reason === "auth" || reason === "auth_permanent")
@@ -237,13 +245,28 @@ export function createEmbeddedRunFailoverRetryController(input: {
         transientRetryWindowStartMs = null;
       }
     },
-    advanceAuthProfile: (reason: FailoverReason | null, context: RateLimitAuthProfileContext) =>
-      reason === "rate_limit" ? advanceRateLimitAuthProfile(context) : advanceAttemptAuthProfile(),
+    advanceAuthProfile: (reason: FailoverReason | null, context: RateLimitAuthProfileContext) => {
+      const profileId = preparedRuntime.snapshot().lastProfileId;
+      if (
+        profileId &&
+        getScopedOAuthCandidate(profileId) &&
+        (reason === "auth" || reason === "auth_permanent")
+      ) {
+        resolveScopedOAuthAccessForProfile(profileId, true);
+        throw new ScopedOAuthDelegationError("force-refresh");
+      }
+      return reason === "rate_limit"
+        ? advanceRateLimitAuthProfile(context)
+        : advanceAttemptAuthProfile();
+    },
     maybeMarkAuthProfileFailure,
     resolveAuthProfileFailureReason: resolveProfileFailureReason,
     recoverThrownHarnessAuthFailure: async (error: unknown): Promise<AuthRetryTrace | null> => {
       // Native harnesses can throw before returning a terminal result. Recover only
       // provider-auth failures here; local harness faults must keep propagating.
+      if (error instanceof ScopedOAuthDelegationError) {
+        throw error;
+      }
       if (!preparedRuntime.snapshot().pluginHarnessOwnsTransport) {
         return null;
       }
@@ -252,6 +275,10 @@ export function createEmbeddedRunFailoverRetryController(input: {
         return null;
       }
       const failedProfileId = preparedRuntime.snapshot().lastProfileId;
+      if (failedProfileId && getScopedOAuthCandidate(failedProfileId)) {
+        resolveScopedOAuthAccessForProfile(failedProfileId, true);
+        throw new ScopedOAuthDelegationError("force-refresh");
+      }
       const profileFailureReason = resolveProfileFailureReason(failoverReason);
       const userPinnedProfile =
         params.authProfileIdSource === "user" && failedProfileId === params.authProfileId;

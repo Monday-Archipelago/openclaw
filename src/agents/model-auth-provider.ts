@@ -28,6 +28,8 @@ import { assertAuthProfileMigrationReady } from "./auth-profiles/legacy-source-d
 import { OAuthRefreshFailureError } from "./auth-profiles/oauth-refresh-failure.js";
 import { isStoredCredentialCompatibleWithAuthProvider } from "./auth-profiles/order.js";
 import { resolveAuthStorePathForDisplayAsync } from "./auth-profiles/paths.js";
+import { getScopedOAuthCandidate } from "./auth-profiles/runtime-scope.js";
+import { ScopedOAuthDelegationError } from "./auth-profiles/scoped-oauth-delegation.js";
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import { assertAuthModeAllowedForModel, isAuthModeAllowedForModel } from "./model-auth-policy.js";
 import * as authConfig from "./model-auth-provider-config.js";
@@ -264,7 +266,8 @@ export async function resolveApiKeyForProviderCore(input: {
       provider,
       store,
       mode: mode ? authConfig.profileTypeToAuthMode(mode) : "api-key",
-      authFlow: credential?.type === "oauth" ? credential.authFlow : undefined,
+      authFlow:
+        resolved.authFlow ?? (credential?.type === "oauth" ? credential.authFlow : undefined),
     });
   };
 
@@ -282,7 +285,8 @@ export async function resolveApiKeyForProviderCore(input: {
       profileId,
       deprecatedProfileIds: getDeprecatedProfileIds(),
     });
-    const configuredCredential = store.profiles[profileId];
+    const delegated = getScopedOAuthCandidate(profileId);
+    const configuredCredential = delegated ? undefined : store.profiles[profileId];
     const assertCompatibleProfile = (credentialProvider: string, selectedProfileId = profileId) => {
       if (
         !isStoredCredentialCompatibleWithAuthProvider({
@@ -298,17 +302,22 @@ export async function resolveApiKeyForProviderCore(input: {
     };
     // Pins cannot cross credential realms even when the endpoint did not change.
     // Reject stored mismatches before SecretRef materialization or OAuth refresh.
-    if (configuredCredential) {
+    if (delegated) {
+      if (!isStoredCredentialCompatibleWithAuthProvider({ cfg, provider, credential: delegated })) {
+        throw new ScopedOAuthDelegationError("unusable");
+      }
+    } else if (configuredCredential) {
       assertCompatibleProfile(configuredCredential.provider);
     }
-    const configuredProfileType = configuredCredential?.type;
+    const configuredProfileType = delegated ? "oauth" : configuredCredential?.type;
     if (configuredProfileType) {
       assertAuthModeAllowedForModel({
         ...modelPolicy,
         profileId,
         mode: authConfig.profileTypeToAuthMode(configuredProfileType),
         authFlow:
-          configuredCredential?.type === "oauth" ? configuredCredential.authFlow : undefined,
+          delegated?.authFlow ??
+          (configuredCredential?.type === "oauth" ? configuredCredential.authFlow : undefined),
       });
     }
     const resolved = await resolveApiKeyForProfile({
@@ -361,6 +370,7 @@ export async function resolveApiKeyForProviderCore(input: {
       }).catch((error: unknown) => {
         params.signal?.throwIfAborted();
         if (
+          error instanceof ScopedOAuthDelegationError ||
           error instanceof OAuthRefreshFailureError ||
           error instanceof SecretSurfaceUnavailableError
         ) {
@@ -520,10 +530,12 @@ export async function resolveApiKeyForProviderCore(input: {
   let deferredAuthProfileResult: ResolvedProviderAuth | null = null;
   let refreshFailure: OAuthRefreshFailureError | undefined;
   for (const candidate of order) {
-    const candidateCredential = store.profiles[candidate];
-    const candidateType = candidateCredential?.type;
+    const delegated = getScopedOAuthCandidate(candidate);
+    const candidateCredential = delegated ? undefined : store.profiles[candidate];
+    const candidateType = delegated ? "oauth" : candidateCredential?.type;
     const candidateAuthFlow =
-      candidateCredential?.type === "oauth" ? candidateCredential.authFlow : undefined;
+      delegated?.authFlow ??
+      (candidateCredential?.type === "oauth" ? candidateCredential.authFlow : undefined);
     const candidateMode = candidateType
       ? authConfig.profileTypeToAuthMode(candidateType)
       : undefined;
@@ -573,7 +585,10 @@ export async function resolveApiKeyForProviderCore(input: {
       }
     } catch (err) {
       params.signal?.throwIfAborted();
-      if (err instanceof SecretSurfaceUnavailableError) {
+      if (
+        err instanceof ScopedOAuthDelegationError ||
+        err instanceof SecretSurfaceUnavailableError
+      ) {
         throw err;
       }
       if (

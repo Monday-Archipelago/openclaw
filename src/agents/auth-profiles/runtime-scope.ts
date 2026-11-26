@@ -7,13 +7,101 @@ import { resolveDatabasePathKey } from "../../infra/sqlite-worker-identity.js";
 import type { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import {
+  listScopedOAuthCandidates,
+  resolveScopedOAuthAccess,
+  type ScopedOAuthDelegation,
+} from "./scoped-oauth-delegation.js";
+import {
+  observeScopedOAuthRuntimeModule,
+  reportScopedOAuthDiagnostic,
+  scopedOAuthDiagnosticsEnabled,
+  type ScopedOAuthRuntimeDiagnosticStage,
+} from "./scoped-oauth-diagnostic.js";
 import type { AuthProfileStore } from "./types.js";
 
 type AuthProfileRuntimeMode =
   | { kind: "env-only" }
-  | { kind: "agent-dir"; agentDir: string; sharedStore?: AuthProfileStore; env: NodeJS.ProcessEnv };
+  | {
+      kind: "agent-dir";
+      agentDir: string;
+      sharedStore?: AuthProfileStore;
+      env: NodeJS.ProcessEnv;
+      oauthDelegation?: ScopedOAuthDelegation;
+    };
 
 export const authProfileRuntimeMode = new AsyncLocalStorage<AuthProfileRuntimeMode>();
+
+const diagnosticRuntimeModule = Symbol("scoped-oauth-runtime-module");
+
+/** Observe the host and packaged consumer without changing selection or scope ownership. */
+export function reportScopedOAuthRuntimeDiagnostic(
+  stage: ScopedOAuthRuntimeDiagnosticStage,
+  selection?: { explicitOrder?: readonly string[]; selectedProfile?: string },
+): void {
+  if (!scopedOAuthDiagnosticsEnabled()) {
+    return;
+  }
+  const mode = authProfileRuntimeMode.getStore();
+  const scope = mode?.kind === "agent-dir" ? mode.oauthDelegation : undefined;
+  let candidates: ReturnType<typeof listScopedOAuthCandidates> | undefined = scope ? undefined : [];
+  if (scope) {
+    try {
+      candidates = listScopedOAuthCandidates(scope);
+    } catch {
+      // A foreign/retired capability is a diagnostic fact, not a fallback authorization.
+    }
+  }
+  const explicitOrder = selection?.explicitOrder;
+  const selectedProfile = selection?.selectedProfile;
+  reportScopedOAuthDiagnostic({
+    stage,
+    mode: mode?.kind ?? "none",
+    scopePresent: Boolean(scope),
+    scopeReadable: scope ? candidates !== undefined : null,
+    candidateMarkers: candidates?.length ?? null,
+    explicitOrderPresent: stage === "order" ? explicitOrder !== undefined : null,
+    explicitOrderMatchesMarker:
+      explicitOrder && candidates
+        ? candidates.some((candidate) => explicitOrder.includes(candidate.profileId))
+        : null,
+    selectedProfilePresent: stage === "codex" ? Boolean(selectedProfile) : null,
+    selectedProfileMatchesMarker:
+      selectedProfile && candidates
+        ? candidates.some((candidate) => candidate.profileId === selectedProfile)
+        : null,
+    sameRuntimeModuleAsEntry: observeScopedOAuthRuntimeModule(stage, diagnosticRuntimeModule),
+  });
+}
+
+export function getScopedOAuthDelegation(): ScopedOAuthDelegation | undefined {
+  const mode = authProfileRuntimeMode.getStore();
+  return mode?.kind === "agent-dir" ? mode.oauthDelegation : undefined;
+}
+
+export function getScopedOAuthCandidates() {
+  const scope = getScopedOAuthDelegation();
+  return scope ? listScopedOAuthCandidates(scope) : [];
+}
+
+export function getScopedOAuthCandidate(profileId: string | undefined) {
+  return profileId
+    ? getScopedOAuthCandidates().find((entry) => entry.profileId === profileId)
+    : undefined;
+}
+
+/** Resolve only a marked candidate, before any persisted credential or fallback path. */
+export function captureScopedOAuthAccessForProfile(profileId: string) {
+  const candidate = getScopedOAuthCandidate(profileId);
+  const scope = getScopedOAuthDelegation();
+  return scope && candidate
+    ? (forceRefresh = false) => resolveScopedOAuthAccess(scope, { ...candidate, forceRefresh })
+    : undefined;
+}
+
+export function resolveScopedOAuthAccessForProfile(profileId: string, forceRefresh = false) {
+  return captureScopedOAuthAccessForProfile(profileId)?.(forceRefresh);
+}
 
 type WorkerAuthProfileWrites = {
   env: NodeJS.ProcessEnv;

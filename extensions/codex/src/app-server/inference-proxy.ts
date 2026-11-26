@@ -282,6 +282,9 @@ export async function createCodexInferenceProxy(params: {
               delete headers[key];
             }
             headers.authorization = `Bearer ${auth.token}`;
+            if (auth.accountId) {
+              headers["chatgpt-account-id"] = auth.accountId;
+            }
             // Required by the OSS preview; remove when OpenAI retires this header.
             headers["x-openai-chatpass-test"] = "codex-direct";
           }
@@ -305,6 +308,11 @@ export async function createCodexInferenceProxy(params: {
             auditContext: "codex-parent-local-inference",
           });
           assertAuthorized();
+          if (guarded.response.status === 401 && params.oauth?.nonRefreshable) {
+            // A delegate may not refresh or replay an auth-rejected request.
+            await params.oauth.resolve(true);
+            throw new Error(FAILURE);
+          }
           if (!upload.retry || guarded.response.status !== 401 || attempt === 1) {
             upload.commit?.();
             break;

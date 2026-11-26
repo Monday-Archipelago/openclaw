@@ -3,6 +3,8 @@ import type { CodexLoginAccountParams } from "./protocol.js";
 
 export type CodexAppServerPreparedAuthProfileSnapshot = {
   inferenceAuth?: "host-oauth";
+  /** A runtime-only delegated proof must not be resolved as a persisted OAuth grant. */
+  scopedOAuthDelegation?: true;
   loginParams: CodexLoginAccountParams;
   secretFreeCacheKey: string;
   /** Genuine ChatGPT principal id; email/profile fallbacks are not authorization identity. */

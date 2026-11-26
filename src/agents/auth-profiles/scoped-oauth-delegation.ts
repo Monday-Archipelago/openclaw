@@ -2,6 +2,7 @@ import { fingerprintAuthProfileCredential } from "../execution-auth-binding.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import { resolveTokenExpiryState } from "./credential-state.js";
 import { isOAuthRefreshFence } from "./oauth-refresh-marker.js";
+import { recoverScopedOAuthAuthFlow } from "./scoped-oauth-classification.js";
 import type { OAuthCredential } from "./types.js";
 
 export type ScopedOAuthDelegationReason =
@@ -122,7 +123,8 @@ export function createScopedOAuthDelegation(
 ): ScopedOAuthDelegation {
   const entries = new Map<string, Candidate>();
   for (const { profileId, provider, credential, assertCurrent } of candidates) {
-    const authFlow = credential?.authFlow;
+    const recoveredAuthFlow = credential ? recoverScopedOAuthAuthFlow(credential) : undefined;
+    const authFlow = credential?.authFlow ?? recoveredAuthFlow;
     if (entries.has(profileId)) {
       entries.set(profileId, { provider, authFlow, reason: "unusable" });
       continue;
@@ -151,8 +153,9 @@ export function createScopedOAuthDelegation(
         provider,
         credential.access,
         credential.expires,
-        credential.authFlow,
-        credential.accountId,
+        authFlow,
+        // A recovered SIWC accountId identifies the grant, not the inference workspace.
+        recoveredAuthFlow ? undefined : credential.accountId,
         proof,
       );
       entries.set(profileId, { provider, authFlow, projection, assertCurrent });

@@ -1,4 +1,5 @@
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { recoverScopedOAuthAuthFlow } from "./scoped-oauth-classification.js";
 import type { AuthProfileStore } from "./types.js";
 
 export function scopedOAuthDiagnosticsEnabled(): boolean {
@@ -11,6 +12,7 @@ export function summarizeScopedOAuthRows(profiles: AuthProfileStore["profiles"])
   let openAiOAuthRows = 0;
   let openAiMissingFlowRows = 0;
   let matchingFlowRows = 0;
+  let recoveredFlowRows = 0;
   let copyToAgentsDeniedRows = 0;
   for (const row of Object.values(profiles)) {
     if (row.type !== "oauth") {
@@ -24,11 +26,17 @@ export function summarizeScopedOAuthRows(profiles: AuthProfileStore["profiles"])
     if (row.authFlow === undefined) {
       openAiMissingFlowRows++;
     }
+    const recoveredAuthFlow = recoverScopedOAuthAuthFlow(row);
     if (row.authFlow === "chatgpt-token-sharing") {
       matchingFlowRows++;
-      if (row.copyToAgents === false) {
-        copyToAgentsDeniedRows++;
-      }
+    } else if (recoveredAuthFlow) {
+      recoveredFlowRows++;
+    }
+    if (
+      (row.authFlow === "chatgpt-token-sharing" || recoveredAuthFlow) &&
+      row.copyToAgents === false
+    ) {
+      copyToAgentsDeniedRows++;
     }
   }
   return {
@@ -36,6 +44,7 @@ export function summarizeScopedOAuthRows(profiles: AuthProfileStore["profiles"])
     openAiOAuthRows,
     openAiMissingFlowRows,
     matchingFlowRows,
+    recoveredFlowRows,
     copyToAgentsDeniedRows,
   };
 }

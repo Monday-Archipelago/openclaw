@@ -24,6 +24,7 @@ describe("scoped OAuth admission diagnostics", () => {
       openAiOAuthRows: 3,
       openAiMissingFlowRows: 1,
       matchingFlowRows: 2,
+      recoveredFlowRows: 0,
       copyToAgentsDeniedRows: 1,
     });
     expect(JSON.stringify(summary)).not.toContain("synthetic");

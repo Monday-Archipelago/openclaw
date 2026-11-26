@@ -16,6 +16,7 @@ import {
   fingerprintScopedOAuthGeneration,
   readScopedOAuthAuthority,
 } from "./scoped-oauth-authority.js";
+import { recoverScopedOAuthAuthFlow } from "./scoped-oauth-classification.js";
 import {
   createScopedOAuthDelegation,
   type ScopedOAuthDelegation,
@@ -57,10 +58,11 @@ export async function prepareScopedSharedAuthProfileStore(env: NodeJS.ProcessEnv
     const candidates = Object.entries(sharedStore.profiles).flatMap(([profileId, credential]) => {
       // Ordinary OAuth/native login flows retain their existing portability behavior.
       // Phase A targets the existing ChatGPT token-sharing bearer transport.
+      const recoveredAuthFlow = recoverScopedOAuthAuthFlow(credential);
       if (
         credential.type !== "oauth" ||
         credential.provider !== "openai" ||
-        credential.authFlow !== "chatgpt-token-sharing"
+        (credential.authFlow !== "chatgpt-token-sharing" && !recoveredAuthFlow)
       ) {
         return [];
       }
